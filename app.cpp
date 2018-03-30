@@ -1,89 +1,30 @@
-// ----------------------------------------------------------------------------
-// -                       Fast Global Registration                           -
-// ----------------------------------------------------------------------------
-// The MIT License (MIT)
-//
-// Copyright (c) Intel Corporation 2016
-// Qianyi Zhou <Qianyi.Zhou@gmail.com>
-// Jaesik Park <syncle@gmail.com>
-// Vladlen Koltun <vkoltun@gmail.com>
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions
-// ----------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------
+//                                Normal estimation
+//--------------------------------------------------------------------------------------
+//Julia Sanchez, Florent dupont, Florence Denis, Paul Checchin, Laurent Trassoudaine
+//Liris (Lyon), Institut Pascal (Clermont Ferrand)
+//Région Auvergne Rhone Alpes ARC6
+// --------------------------------------------------------------------------------------
 
 #include "app.h"
 
 
-// reads file and puts it into pointcloud_
-
-template<typename vec>
-int CApp<vec>::Read(const char* filepath)
-{
-        std::cout<<"reading file"<<std::endl<<std::endl;
-    std::ifstream fin(filepath);
-    vector<vec> res;
-    int n = 0;
-    if (fin.is_open())
-    {
-        while (!fin.eof())
-        {
-            vec pt;
-            for (int i=0; i<pt.size(); ++i)
-                fin >> pt(i);
-            res.push_back(pt);
-            ++n;
-        }
-        fin.close();
-        pointcloud_ = res;
-        pt = pointcloud_[5];
-    }
-    else
-    {
-       std::cout<<"did not find file"<<std::endl<<std::endl;
-    }
-    return n;
-}
-
-
-
 //build tree to compute neighbors
 
-template<typename vec>
-void CApp<vec>::buildTree()
+void CApp::setTree(flann::Index<flann::L2<float>> *t)
 {
-    int dim = pointcloud_[0].size();
-    int pc_size = pointcloud_.size();
+    tree_ = t;
+}
 
-    std::vector<float> pc(pc_size * dim);
-    flann::Matrix<float> flann_mat(&pc[0], pc_size, dim);
-
-    int n = 0;
-
-    for (int i =0; i < pc_size; ++i)
-    {
-        for (int j =0; j < dim; ++j)
-        {
-            pc[n] = pointcloud_[i](j);
-            ++n;
-        }
-    }
-
-    tree_ = new flann::Index<flann::L2<float>>(flann_mat, flann::KDTreeSingleIndexParams(15));
-
-    tree_->buildIndex();
-
+void CApp::setPc(std::vector<Eigen::Vector3f> *pc)
+{
+    pointcloud_ = pc;
 }
 
 
 // Get neighbors from tree and puts it in neighborhood_
 
-template<typename vec>
-void CApp<vec>::selectNeighbors(int neigh_number)
+void CApp::selectNeighbors(int neigh_number)
 {
     std::vector<float> dis;
     std::vector<int> neigh;
@@ -93,9 +34,9 @@ void CApp<vec>::selectNeighbors(int neigh_number)
 
     for (int i = 1; i < neigh.size(); ++i)
     {
-        vec test = pointcloud_[neigh[i]]-pt;
+        Eigen::Vector3f test = pointcloud_->at(neigh[i])-pt;
         if(test.norm() != 0)
-            neighborhood_[i-1] = pointcloud_[neigh[i]];
+            neighborhood_[i-1] = pointcloud_->at(neigh[i]);
         else
         {
             SearchFLANNTree(tree_, pt, neigh, dis, neigh_number+1);
@@ -108,17 +49,15 @@ void CApp<vec>::selectNeighbors(int neigh_number)
 
 //get neighborhood size
 
-template<typename vec>
-int CApp<vec>::get_N_neigh()
+int CApp::get_N_neigh()
 {
     return neighborhood_.size();
 }
 
 //Search function in the tree to get the nearest. (internally used in selectNeighbors)
 
-template<typename vec>
-void CApp<vec>::SearchFLANNTree(flann::Index<flann::L2<float>>* index,
-                            vec& input,
+void CApp::SearchFLANNTree(flann::Index<flann::L2<float>>* index,
+                            Eigen::Vector3f& input,
                             std::vector<int>& indices,
                             std::vector<float>& dists,
                             int nn)
@@ -141,8 +80,7 @@ void CApp<vec>::SearchFLANNTree(flann::Index<flann::L2<float>>* index,
 
 
 //Once neighborhood is computed, we compute distance of the neighbors from current point and put it in dist_
-template<typename vec>
-void CApp<vec>::ComputeDist()
+void CApp::ComputeDist()
 {
     dist_.resize (neighborhood_.size());
     for (int i = 0; i < neighborhood_.size(); ++i)
@@ -154,8 +92,7 @@ void CApp<vec>::ComputeDist()
     moy_ = moy_/neighborhood_.size();
 }
 
-template<typename vec>
-void CApp<vec>::initNormal()
+void CApp::initNormal()
 {
     normal(0) = sin(theta) * cos(phi);
     normal(1) = sin(theta) * sin(phi);
@@ -163,9 +100,7 @@ void CApp<vec>::initNormal()
 }
 
 
-
-template<typename vec>
-void CApp<vec>::pca(Eigen::Vector3f &dir0, Eigen::Vector3f &dir1, Eigen::Vector3f &dir2)
+void CApp::pca(Eigen::Vector3f &dir0, Eigen::Vector3f &dir1, Eigen::Vector3f &dir2)
 {
     Eigen::MatrixXf points (3, neighborhood_.size());
 
@@ -218,32 +153,26 @@ void CApp<vec>::pca(Eigen::Vector3f &dir0, Eigen::Vector3f &dir1, Eigen::Vector3
 
     }
 
-template<typename vec>
-void CApp<vec>::getEdgeDirection(int it)
+void CApp::getEdgeDirection(int it)
 {
-    phi= atan2(normal(1),normal(0));
-    theta= acos(normal(2));
-
     initNormal();
-    Eigen::Vector3f normal_test, ran, global_min;
+    Eigen::Vector3f normal_test, global_min;
 
     global_min = normal.segment(0,3);
-
-    ran(0) = 0.5;
-    ran(1) = 0;
-    ran(2) = 0.86602540378;
 
     int N_hist = 10;
     Eigen::MatrixXf hist(N_hist,N_hist);
 
-    normal_test = ran.cross(global_min);
+    normal_test(0) = sqrt(1/(1 + (global_min(0)*global_min(0)/(global_min(1)*global_min(1)) ) ) );
+    normal_test(1) = normal_test(0)*(-global_min(0)/global_min(1));
+    normal_test(2) = 0;
     normal_test /= normal_test.norm();
 
     theta = 2*M_PI/it;
     Eigen::Affine3f transform = Eigen::Affine3f::Identity();
     transform.rotate (Eigen::AngleAxisf (theta, global_min));
 
-    float temp = 1000000;
+    float temp = 1/epsilon;
 
     for(int k = 0; k <= it; k++)
     {
@@ -322,60 +251,15 @@ void CApp<vec>::getEdgeDirection(int it)
 }
 
 
-//template<typename vec>
-//void CApp<vec>::ComputeWeighs(bool normalize, double mu, bool use_last)
-//{
-//    for (int c = 0; c < neighborhood_.size(); c++) {
 
-//        vec normalized;
-//        if(normalize)
-//            normalized = dist_[c]/dist_[c].norm();
-//        else
-//            normalized = dist_[c];
-//        float er = normal.dot(normalized) * normal.dot(normalized);
-
-
-//        if(use_last)
-//        {
-//            float diff = poids_[c] - ( mu / (er + mu) );
-
-//            if(diff_poids_[c]*diff>0)
-//            {
-//                poids_[c] = mu / (er + mu);
-//                diff_poids_[c] = diff;
-//            }
-
-//        }
-//        else
-//        {
-//            if(poids_[c] != 0)
-//                diff_poids_[c] = poids_[c] - ( mu / (er + mu) );
-
-//            poids_[c] = mu / (er + mu);
-//        }
-//    }
-
-//    float max_poids = *std::max_element(poids_.begin(), poids_.end());
-
-//    for (int c = 0; c < neighborhood_.size(); c++) {
-//        poids_[c] /= max_poids;
-//    }
-
-//}
-
-template<typename vec>
-void CApp<vec>::ComputeWeighs(bool normalize, double mu, bool use_last)
+void CApp::ComputeWeighs(double mu)
 {
     std::vector<float> er_angle(neighborhood_.size());
     std::vector<float> er_proj(neighborhood_.size());
 
-    for (int c = 0; c < neighborhood_.size(); c++) {
-
-        vec normalized;
-        normalized = dist_[c]/dist_[c].norm();
-//        er_angle[c] = normal.dot(normalized) * normal.dot(normalized);
-//        er_proj[c] = normal.dot(dist_[c]) * normal.dot(dist_[c]);
-        er_angle[c] = abs(normal.dot(normalized));
+    for (int c = 0; c < neighborhood_.size(); c++)
+    {
+        er_angle[c] = abs(normal.dot(dist_[c]/dist_[c].norm()));
         er_proj[c] = abs(normal.dot(dist_[c]));
     }
 
@@ -389,31 +273,42 @@ void CApp<vec>::ComputeWeighs(bool normalize, double mu, bool use_last)
             max_dist = dist_[c].norm();
     }
 
+    float sigma = coeff_sigma*max_dist;
 
     for (int c = 0; c < neighborhood_.size(); c++)
     {
         float alpha = ( max_dist-dist_[c].norm() )/max_dist;
         float er_tot = (1-alpha)*er_angle[c]/er_angle_max + (1-alpha) * er_proj[c]/er_proj_max ;
         er_tot = er_tot*er_tot;
+        float poids_dist = exp(-(dist_[c].dot(dist_[c]))/(2*sigma*sigma));
+        poids_[c] = poids_dist * mu / (er_tot + mu);
+    }
 
-        if(use_last)
-        {
-            float diff = poids_[c] - ( mu / (er_tot + mu) );
+    float max_poids = *std::max_element(poids_.begin(), poids_.end());
 
-            if(diff_poids_[c]*diff>0)
-            {
-                poids_[c] = mu / (er_tot + mu);
-                diff_poids_[c] = diff;
-            }
+    for (int c = 0; c < neighborhood_.size(); c++) {
+        poids_[c] /= max_poids;
+    }
 
-        }
-        else
-        {
-            if(poids_[c] != 0)
-                diff_poids_[c] = poids_[c] - ( mu / (er_tot + mu) );
+}
 
-            poids_[c] = mu / (er_tot + mu);
-        }
+void CApp::ComputeWeighs_proj(double mu)
+{
+    float max_dist = 0;
+    for (int c = 0; c < neighborhood_.size(); c++)
+    {
+        if(max_dist<dist_[c].norm())
+            max_dist = dist_[c].norm();
+    }
+
+    float er_proj;
+    float sigma = coeff_sigma*max_dist;
+
+    for (int c = 0; c < neighborhood_.size(); c++)
+    {
+        er_proj = normal.dot(dist_[c]);
+        float poids_dist = exp(-(dist_[c].dot(dist_[c]))/(2*sigma*sigma));
+        poids_[c] = poids_dist * mu / (er_proj*er_proj + mu);
     }
 
     float max_poids = *std::max_element(poids_.begin(), poids_.end());
@@ -427,149 +322,63 @@ void CApp<vec>::ComputeWeighs(bool normalize, double mu, bool use_last)
 
 //Once the global minimum of the function is computed we make the minimization WEIGHTED depending on the neighbors error
 
-template<typename vec>
-float CApp<vec>::Optimize(float div_fact, float lim_mu, double* mu_init, bool normalize) // normalize decided if minimiser projection ou minimiser angle : projection normalisée
+void CApp::Optimize(float div_fact, float lim_mu, double* mu_init) // normalize decided if minimiser projection ou minimiser angle : projection normalisée
 //probleme with angle : points on the same z have different errors : less error for those far from p0 in z direction
 //problem with projection : points on the same p0pi direction have different errors : less error for closest points.
 {
-
-    bool display = false;
-    if (display)
-    {
-        system("rm neighbors*.csv");
-        system("rm normal*.csv");
-    }
-    phi = atan2(normal(1),normal(0));
-    theta = acos(normal(2));
-
     double mu = *mu_init;
 
-    if (mu < 1e-10 && normalize)
+    if (mu < epsilon)
     {
-//        mu = 5.0;//----------------------------------------------------------------------------------------------
-        mu = 1;
+        mu = mu_max;
     }
-    else if (  ( (mu-1.0) < 1e-10 ) && normalize)
-    {
-        std::vector<float> dist(dist_.size());
-        for (int i = 0; i<dist.size(); ++i)
-        {
-            vec normalized = dist_[i]/dist_[i].norm();
-            dist[i] = normal.dot(normalized) * normal.dot(normalized);
-        }
-
-        std::sort(dist.begin(), dist.end());
-        mu = dist[dist.size()-1];
-//        mu = 0.1*dist[dist.size()-1];
-//        mu = dist[0]; //----------------------------------------------------------------------------------------------
-    }
-    else if (mu < 1e-10 && !normalize)
+    else
     {
         std::vector<float> dist(dist_.size());
         for (int i = 0; i<dist.size(); ++i)
         {
-            vec normalized = dist_[i];
+            Eigen::Vector3f normalized = dist_[i]/dist_[i].norm();
             dist[i] = normal.dot(normalized) * normal.dot(normalized);
         }
 
         std::sort(dist.begin(), dist.end());
-        mu = 2*dist[dist.size()-1];
-    }
-    else if ( ( (mu-1.0) < 1e-10 ) && !normalize)
-    {
-        std::vector<float> dist(dist_.size());
-        for (int i = 0; i<dist.size(); ++i)
-        {
-            vec normalized = dist_[i];
-            dist[i] = normal.dot(normalized) * normal.dot(normalized);
-        }
-
-        std::sort(dist.begin(), dist.end());
-        mu = dist[dist.size()-1];
+        mu = std::max(lim_mu,dist[(int)(dist.size()/4)]);
     }
 
-
-    int itr = 1;
-    float error = 1000000;
-    float diff = 1000000;
-    float tmp = 0;
     poids_.resize(neighborhood_.size());
-    diff_poids_.resize(neighborhood_.size());
-    error_.resize(neighborhood_.size());
-    diff_error_.resize(neighborhood_.size());
     for (int c = 0; c < neighborhood_.size(); c++) {
         poids_[c] = 0;
-        diff_poids_[c] = 0;
-        error_[c] = 0;
-        diff_error_[c] = 0;
     }
 
     int N = 2;
-    int it = N*(int)(std::log(mu/lim_mu)/std::log(div_fact));
+    int it = std::max(N*(int)(log(mu/(lim_mu) )/log(div_fact)), itr_min);
 
-    while ( (itr <= it + 20 ) || itr<20) //&& diff>0.0000001  CHANGEMENT DE LA LIMITE POUR ALLER PLUS LOIN APRES AVOIR ATTEINT LIM_MU
+    const int nvariable = pt.size()-1;	// dimensions of J
+    Eigen::MatrixXd JTJ(nvariable, nvariable);
+    Eigen::MatrixXd JTr(nvariable, 1);
+    Eigen::MatrixXd J(nvariable, 1);
+    Eigen::Vector3f normalized;
+    double r;
+
+    for( int itr = 1; itr <= it; ++itr)
     {
         if( mu > lim_mu && (itr % N) == 0)
             mu /= div_fact;
 
-        const int nvariable = pt.size()-1;	// dimensions of J
-        Eigen::MatrixXd JTJ(nvariable, nvariable);
-        Eigen::MatrixXd JTr(nvariable, 1);
-        Eigen::MatrixXd J(nvariable, 1);
         JTJ.setZero();
         JTr.setZero();
 
-        double r;
+        ///actualize normal
 
-        error = 0;
-        float sum_poids = 0;
+        //compute weighs
 
-        float moy_posx = 0;
-        float moy_posy = 0;
-        float moy_proj = 0;
+          ComputeWeighs(mu);
 
-        //actualize normal
+        // minimize function and actualize phi, theta and consequently normal
 
-        //////////////////////////////////////////////////////////////////////////////////////////////////////
-          ComputeWeighs(normalize, mu, false);
-        //////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        //DISPLAY------------------------------------------------------------------------------------------------------------
-        if( ( itr % 10 == 0 || itr < 10 ) && display)
+        for (int c = 0; c < neighborhood_.size(); c++)
         {
-            std::ofstream fneigh;
-            std::stringstream stm;
-            stm.str("");
-            stm<<"neighbors"<<itr<<".csv";
-            std::string neighbors_file = stm.str();
-            fneigh.open(neighbors_file, std::ofstream::trunc);
-            if (fneigh.is_open())
-            {
-                fneigh<<"x,y,z,weight\n";
-            }
-            fneigh.close();
-            writeNeighbors(neighbors_file);
-
-            std::ofstream fnormal;
-            stm.str("");
-            stm<<"normal"<<itr<<".csv";
-            std::string normal_file = stm.str();
-            fnormal.open(normal_file, std::ofstream::trunc);
-            if (fnormal.is_open())
-            {
-                fnormal<<"x,y,z,nx,ny,nz,iteration\n";
-                fnormal<<pt(0)<<","<<pt(1)<<","<<pt(2)<<","<<normal(0)<<","<<normal(1)<<","<<normal(2)<<","<<(float)(itr)/(float)(it)<<"\n";
-            }
-            fnormal.close();
-            writeNeighbors(neighbors_file);
-
-        }
-
-        //---------------------------------------------------------------------------------------------------------------------
-
-        for (int c = 0; c < neighborhood_.size(); c++) {
-
-            vec normalized = dist_[c]/dist_[c].norm();
+            normalized = dist_[c]/dist_[c].norm();
             J(0) = poids_[c] * (normalized(0) * cos(theta) * cos(phi)    + normalized(1) * cos(theta) * sin(phi) + normalized(2) * (-sin(theta)));
             J(1) = poids_[c] * (normalized(0) * sin(theta) * (-sin(phi)) + normalized(1) * sin(theta) * cos(phi));
             r = poids_[c] * normal.dot(normalized);
@@ -580,70 +389,30 @@ float CApp<vec>::Optimize(float div_fact, float lim_mu, double* mu_init, bool no
         Eigen::MatrixXd result(nvariable, 1);
         result = -JTJ.llt().solve(JTr);
 
-        theta = theta + result(0);
-        phi = phi + result(1);
-
-        normal(0) = sin(theta) * cos(phi);
-        normal(1) = sin(theta) * sin(phi);
-        normal(2) = cos(theta);
-
-        for (int c = 0; c < neighborhood_.size(); c++) {
-            ////////////////////////////////////////
-            //valeurs affichées pour débugging
-            error = error +r*r;
-
-            moy_posx += poids_[c]*neighborhood_[c](0);
-            moy_posy += poids_[c]*neighborhood_[c](1);
-            moy_proj +=r;
-            ////////////////////////////////////////
-
-            sum_poids += poids_[c];
-        }
-
-        moy_posx /= sum_poids;
-        moy_posy /= sum_poids;
-        moy_proj /= sum_poids;
-
-        error = sqrt(error / sum_poids);
-
-        if(itr != 1)
-            diff = abs(tmp - error);
-
-        ++itr;
-
-        tmp = error;
+        actuNormal(phi + result(1), theta + result(0));
     }
 
     float sens = normal.dot(pt);
     if(sens>0)
         normal=-normal;
 
-    phi = atan2(normal(1),normal(0));
-    theta = acos(normal(2));
-    //theta = atan2(normal(2), sqrt(normal(0)*normal(0)+normal(1)*normal(1)));
-
     *mu_init = mu;
-    return error;
 }
 
 
 //optional : for points which are in the middle of planes (do not need a weighted minimization) : can optimize alternatively the normal and the point position
 
-template<typename vec>
-float CApp<vec>::OptimizePos(int it)
+void CApp::OptimizePos(int it)
 {
-    phi = atan2(normal(1),normal(0));
-    theta = acos(normal(2));
-
     float X = 0;
 
     int itr = 1;
-    float error = 1000000;
-    float diff = 1000000;
+    float error = 1/epsilon;
+    float diff = 1/epsilon;
     float tmp = 0;
 
 
-    while ( (itr <= it && error>0.00001 && diff>0.0000001) || itr<20)
+    while ( (itr <= it && error>lim_error && diff>lim_diff) || itr<itr_min)
     {
         const int nvariable = 3;
         Eigen::MatrixXd JTJ(nvariable, nvariable);
@@ -654,17 +423,15 @@ float CApp<vec>::OptimizePos(int it)
 
         double r;
         error = 0;
-        float moy_proj = 0;
-        float sum_poids = 0;
 
         //actualize normal
 
         for (int c = 0; c < neighborhood_.size(); c++) {
 
-            vec normalized = dist_[c];
+            Eigen::Vector3f normalized = dist_[c];
             J(0) = (normalized(0) * cos(theta) * cos(phi)    + normalized(1) * cos(theta) * sin(phi) + normalized(2) * (-sin(theta)));
             J(1) = (normalized(0) * sin(theta) * (-sin(phi)) + normalized(1) * sin(theta) * cos(phi));
-            J(2) = -1; //( temp/dist_[c].norm() ) * ( pow(normal.dot(normalized),2) - 1 );
+            J(2) = -1;
             r = normal.dot(normalized)-X;
             JTJ += J * J.transpose();
             JTr += J * r;
@@ -673,23 +440,15 @@ float CApp<vec>::OptimizePos(int it)
         Eigen::MatrixXd result(nvariable, 1);
         result = -JTJ.llt().solve(JTr);
 
-        theta = theta + result(0);
-        phi = phi + result(1);
+        actuNormal(phi + result(1), theta + result(0));
         X += result(2);
 
-        normal(0) = sin(theta) * cos(phi);
-        normal(1) = sin(theta) * sin(phi);
-        normal(2) = cos(theta);
-
-        for (int c = 0; c < neighborhood_.size(); c++) {
-
-            vec normalized = dist_[c]-X*normal;
+        for (int c = 0; c < neighborhood_.size(); c++)
+        {
+            Eigen::Vector3f normalized = dist_[c]-X*normal;
             r = normal.dot(normalized);
             error = error + r*r;
-            moy_proj += r;
         }
-
-        moy_proj /= neighborhood_.size();
 
         error = sqrt(error);
         if(itr != 1)
@@ -707,29 +466,16 @@ float CApp<vec>::OptimizePos(int it)
     float sens = normal.dot(pt);
     if(sens>0)
         normal=-normal;
-
-    return error;
 }
 
 
 //for points on edges : can optimize alternatively the normal and the point position (some points are falsely optimized because of the precision of the normal)
 
-template<typename vec>
-float CApp<vec>::OptimizePos1(float div_fact, float lim_mu, double* mu_init)
+void CApp::OptimizePos1(float div_fact, float lim_mu, double* mu_init)
 {
-    bool display = false;
-    if (display)
-    {
-        system("rm neighbors*.csv");
-        system("rm normal*.csv");
-    }
-
-    phi = atan2(normal(1),normal(0));
-    theta = acos(normal(2));
-
-    //si j'utilise le calcul normalisé dans optimize je dois adapter mu :
+    //we first actualize mu to be in the same situation as in the output of optimize (because we have changed error evaluation)
     float temp_i;
-    float tempo = 100000000;
+    float tempo = 1/epsilon;
 
     double mu = *mu_init;
 
@@ -742,88 +488,42 @@ float CApp<vec>::OptimizePos1(float div_fact, float lim_mu, double* mu_init)
         }
     }
 
-//    mu = 5*std::max(lim_mu,(float)(pow(normal.dot(dist_[temp_i]),2))); //------------------------------------------------------------------------
-    mu = 0.5*std::max(lim_mu,(float)(pow(normal.dot(dist_[temp_i]),2)));
+    mu = std::max(lim_mu,(float)(0.5*pow(normal.dot(dist_[temp_i]),2)));
+//    double mu = 10* lim_mu;
     *mu_init = mu;
 
-    std::vector<float> weigh(neighborhood_.size());
-    float sigma = 0.1;
-    float sum=0;
+    int it = std::max(itr_per_mu*(int)(log(mu/(lim_mu) )/log(div_fact)), itr_min);
 
-    for (int c = 0; c < neighborhood_.size(); c++) {
+    const int nvariable = 2;	// two variables : phi and theta of normal
+    Eigen::MatrixXd JTJ(nvariable, nvariable);
+    Eigen::MatrixXd JTr(nvariable, 1);
+    Eigen::MatrixXd J(nvariable, 1);
+    double r;
+    float sum_poids = 0;
+    float moy_proj = 0;
 
-        weigh[c] = exp(-dist_[c].dot(dist_[c])/(2*sigma*sigma));
-        sum = sum + weigh[c];
-    }
-
-    int itr = 1;
-    float error = 1000000;
-    float diff = 1000000;
-    float tmp = 0;
-    int p=0;
-    int N = 3;//------------------------------------------------------------------------
-
-    int it = N*(int)(log(mu/(lim_mu) )/log(div_fact));
-
-    while ( (itr <= it && p<5) || itr<21)//&& error>0.000001
+    for( int itr = 1; itr <= it; ++itr)
     {
-
-        //DISPLAY------------------------------------------------------------------------------------------------------------
-        if( ( itr % 10 == 0 || itr < 10 ) && display)
-        {
-            std::ofstream fneigh;
-            std::stringstream stm;
-            stm.str("");
-            stm<<"neighbors"<<itr<<".csv";
-            std::string neighbors_file = stm.str();
-            fneigh.open(neighbors_file, std::ofstream::trunc);
-            if (fneigh.is_open())
-            {
-                fneigh<<"x,y,z,weight\n";
-            }
-            fneigh.close();
-            writeNeighbors(neighbors_file);
-
-            std::ofstream fnormal;
-            stm.str("");
-            stm<<"normal"<<itr<<".csv";
-            std::string normal_file = stm.str();
-            fnormal.open(normal_file, std::ofstream::trunc);
-            if (fnormal.is_open())
-            {
-                fnormal<<"x,y,z,nx,ny,nz,iteration\n";
-                fnormal<<pt(0)<<","<<pt(1)<<","<<pt(2)<<","<<normal(0)<<","<<normal(1)<<","<<normal(2)<<","<<(float)(itr)/(float)(it)<<"\n";
-            }
-            fnormal.close();
-        }
-
-        //---------------------------------------------------------------------------------------------------------------------
-
-        if( mu > lim_mu && (itr % N) == 0)
+        if( mu > lim_mu && (itr % itr_per_mu) == 0)
             mu /= div_fact;
+
+        JTJ.setZero();
+        JTr.setZero();
 
         //actualize position of the point
 
-        float sum_poids = 0;
-        float moy_posx = 0;
-        float moy_posy = 0;
-        float moy_proj = 0;
+        sum_poids = 0;
+        moy_proj = 0;
 
         for (int c = 0; c < neighborhood_.size(); c++)
         {
-            vec normalized = dist_[c];
-            float er = normal.dot(dist_[c])*normal.dot(dist_[c]);
-            if(poids_[c] > 0.7)
+            if(poids_[c] > thresh_weigh)
             {
-                double r = poids_[c]*normal.dot(normalized);
+                r = poids_[c]*normal.dot(dist_[c]);
                 sum_poids += poids_[c];
-                moy_posx += poids_[c]*neighborhood_[c](0);
-                moy_posy += poids_[c]*neighborhood_[c](1);
-                moy_proj +=r;
+                moy_proj += r;
             }
         }
-        moy_posx = moy_posx/sum_poids;
-        moy_posy = moy_posy/sum_poids;
         moy_proj = moy_proj/sum_poids;
         pt = pt + moy_proj*normal;
 
@@ -831,35 +531,15 @@ float CApp<vec>::OptimizePos1(float div_fact, float lim_mu, double* mu_init)
 
         //Compute weighs
 
-        for (int c = 0; c < neighborhood_.size(); c++)
-        {
-            float er = normal.dot(dist_[c])*normal.dot(dist_[c]);
-            weigh[c] = 1;
-            poids_[c] = sqrt(weigh[c])*mu / (er + mu);
-        }
-
-        float max_poids = *max_element(poids_.begin(), poids_.end());
-
-        for (int c = 0; c < neighborhood_.size(); c++)
-        {
-            poids_[c] /= max_poids;
-        }
+        ComputeWeighs_proj(mu);
 
         //actualize normal
 
-        const int nvariable = pt.size()-1;	// dimensions of J
-        Eigen::MatrixXd JTJ(nvariable, nvariable);
-        Eigen::MatrixXd JTr(nvariable, 1);
-        Eigen::MatrixXd J(nvariable, 1);
-        JTJ.setZero();
-        JTr.setZero();
-
         for (int c = 0; c < neighborhood_.size(); c++)
         {
-            vec normalized = dist_[c];
-            J(0) = poids_[c] * (normalized(0) * cos(theta) * cos(phi)    + normalized(1) * cos(theta) * sin(phi) + normalized(2) * (-sin(theta)));
-            J(1) = poids_[c] * (normalized(0) * sin(theta) * (-sin(phi)) + normalized(1) * sin(theta) * cos(phi));
-            double r = poids_[c] * normal.dot(normalized);
+            J(0) = poids_[c] * (dist_[c](0) * cos(theta) * cos(phi)    + dist_[c](1) * cos(theta) * sin(phi) + dist_[c](2) * (-sin(theta)));
+            J(1) = poids_[c] * (dist_[c](0) * sin(theta) * (-sin(phi)) + dist_[c](1) * sin(theta) * cos(phi));
+            r = poids_[c] * normal.dot(dist_[c]);
             JTJ += J * J.transpose();
             JTr += J * r;
         }
@@ -867,37 +547,7 @@ float CApp<vec>::OptimizePos1(float div_fact, float lim_mu, double* mu_init)
         Eigen::MatrixXd result(nvariable, 1);
         result = -JTJ.llt().solve(JTr);
 
-        theta = theta + result(0);
-        phi = phi + result(1);
-
-        normal(0) = sin(theta) * cos(phi);
-        normal(1) = sin(theta) * sin(phi);
-        normal(2) = cos(theta);
-
-        //Compute error
-
-        error = 0;
-        for (int c = 0; c < neighborhood_.size(); c++) {
-            double r = poids_[c]*normal.dot(dist_[c]);
-            sum_poids += poids_[c];
-            error = error + r*r;
-        }
-
-
-        error = sqrt(error / sum_poids);
-
-        if(itr != 1)
-            diff = abs(tmp - error);
-
-        ++itr;
-
-        tmp = error;
-
-        if(diff<0.0000001)
-                ++p;
-        else
-            p = 0;
-
+        actuNormal(phi + result(1), theta + result(0));
     }
 
     float sens = normal.dot(pt);
@@ -905,273 +555,12 @@ float CApp<vec>::OptimizePos1(float div_fact, float lim_mu, double* mu_init)
         normal=-normal;
 
     *mu_init = mu;
-
-    phi = atan2(normal(1),normal(0));
-    theta = acos(normal(2));
-
-    return error;
 }
 
-
-//optional : for points which are in the middle of planes (do not need a weighted minimization) : can optimize alternatively the normal and the point position
-
-template<typename vec>
-float CApp<vec>::OptimizePos2(float div_fact, float lim_mu, double* mu_init)
-{
-    phi = atan2(normal(1),normal(0));
-    theta = acos(normal(2));
-
-    //si j'utilise le calcul normalisé dans optimize je dois adapter mu : ------------------------------------------------------------------------------------------------------
-
-    float temp_i;
-    float tempo = 100000000;
-
-    double mu = *mu_init;
-
-    for (int i = 0; i<dist_.size(); ++i)
-    {
-        if(tempo>abs(mu-pow(normal.dot(dist_[i]/dist_[i].norm()),2)))
-        {
-            tempo = abs(mu-pow(normal.dot(dist_[i]/dist_[i].norm()),2));
-            temp_i = i;
-        }
-    }
-
-    mu = 0.5*std::max(lim_mu,(float)(pow(normal.dot(dist_[temp_i]),2)));
-    *mu_init = mu;
-
-    //------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-    float X = 0;
-
-    int itr = 1;
-    float error = 1000000;
-    float diff = 1000000;
-    float tmp = 0;
-    int N = 5;
-    int p =0;
-
-    int it = N*(int)(log(mu/(lim_mu) )/log(div_fact));
-
-    while ( (itr <= it && p<5) || itr<20)
-    {
-        if( mu > lim_mu && (itr % N) == 0)
-            mu /= div_fact;
-
-        const int nvariable = 3;
-        Eigen::MatrixXd JTJ(nvariable, nvariable);
-        Eigen::MatrixXd JTr(nvariable, 1);
-        Eigen::MatrixXd J(nvariable, 1);
-        JTJ.setZero();
-        JTr.setZero();
-
-        double r;
-        error = 0;
-
-        for (int c = 0; c < neighborhood_.size(); c++)
-        {
-            float er = normal.dot(dist_[c])*normal.dot(dist_[c]);
-            poids_[c] = mu / (er + mu);
-        }
-
-        float max_poids = *max_element(poids_.begin(), poids_.end());
-
-        for (int c = 0; c < neighborhood_.size(); c++)
-        {
-            poids_[c] /= max_poids;
-        }
-
-        //actualize normal and point position
-
-        for (int c = 0; c < neighborhood_.size(); c++)
-        {
-            J(0) = poids_[c]*(dist_[c](0) * cos(theta) * cos(phi)    + dist_[c](1) * cos(theta) * sin(phi) + dist_[c](2) * (-sin(theta)));
-            J(1) = poids_[c]*(dist_[c](0) * sin(theta) * (-sin(phi)) + dist_[c](1) * sin(theta) * cos(phi));
-            J(2) = -poids_[c];
-            r = poids_[c] * normal.dot(dist_[c])-X;
-            JTJ += J * J.transpose();
-            JTr += J * r;
-        }
-
-        Eigen::MatrixXd result(nvariable, 1);
-        result = -JTJ.llt().solve(JTr);
-
-        theta = theta + result(0);
-        phi = phi + result(1);
-        X += result(2);;
-
-        normal(0) = sin(theta) * cos(phi);
-        normal(1) = sin(theta) * sin(phi);
-        normal(2) = cos(theta);
-
-        //actualize error
-
-        float sum_poids = 0;
-        for (int c = 0; c < neighborhood_.size(); c++)
-        {
-            vec normalized = dist_[c]-X*normal;
-            r = poids_[c] * normal.dot(normalized);
-            error = error + r*r;
-            sum_poids += poids_[c];
-        }
-
-        error = sqrt(error / sum_poids);
-
-        if(itr != 1)
-            diff = abs(tmp - error);
-
-        if(diff<0.0000001)
-            ++p;
-        else
-            p = 0;
-
-        ++itr;
-
-        tmp = error;
-
-    }
-
-    pt = pt + X*normal;
-    ComputeDist();
-
-    float sens = normal.dot(pt);
-    if(sens>0)
-        normal=-normal;
-
-    return error;
-}
-
-
-template<typename vec>
-float CApp<vec>::Refine(float div_fact, float lim_mu, double* mu_init)
-{
-    phi = atan2(normal(1),normal(0));
-    theta = acos(normal(2));
-    //theta = atan2(normal(2), sqrt(normal(0)*normal(0)+normal(1)*normal(1)));
-
-    double mu = *mu_init;
-
-    //si j'utilise le calcul normalisé dans optimize je dois adapter mu :
-    float temp_i;
-    float tempo = 100000000;
-
-    for (int i = 0; i<dist_.size(); ++i)
-    {
-        if(tempo>abs(mu-pow(normal.dot(dist_[i]/dist_[i].norm()),2)))
-        {
-            tempo = abs(mu-pow(normal.dot(dist_[i]/dist_[i].norm()),2));
-            temp_i = i;
-        }
-    }
-
-    mu = std::max(lim_mu,(float)(pow(normal.dot(dist_[temp_i]),2)));
-    *mu_init = mu;
-
-    float X = 0;
-
-    std::vector<float> weigh(neighborhood_.size());
-    float sigma = 0.1;
-    float sum=0;
-    poids_.resize(neighborhood_.size());
-
-    for (int c = 0; c < neighborhood_.size(); c++) {
-
-        weigh[c] = exp(-dist_[c].dot(dist_[c])/(2*sigma*sigma));
-        sum = sum + weigh[c];
-    }
-
-//    for (int c = 0; c < neighborhood_.size(); c++) {
-//        float er = normal.dot(dist_[c])*normal.dot(dist_[c]);
-//        poids_[c] = sqrt(weigh[c])*mu / (er+ mu);
-//    }
-
-    int itr = 1;
-    float error = 1000000;
-    float diff = 1000000;
-    float tmp = 0;
-    int p=0;
-
-    int it = 2*(int)(log(mu/(lim_mu) )/log(div_fact));
-
-    while ( (itr <= it && p<3) || itr<20)//&& error>0.000001
-    {
-        X=0;
-        if( mu > lim_mu && (itr % 2) == 0)
-            mu /= div_fact;
-
-        const int nvariable = pt.size()-1;	// dimensions of J
-        Eigen::MatrixXd JTJ(nvariable, nvariable);
-        Eigen::MatrixXd JTr(nvariable, 1);
-        Eigen::MatrixXd J(nvariable, 1);
-        JTJ.setZero();
-        JTr.setZero();
-
-        double r;
-        vec dist_moy = vec::Zero();
-        float sum_poids = 0;
-        error = 0;
-
-        //compute weigthed average point of the neighborhood
-
-        for (int c = 0; c < neighborhood_.size(); c++) {
-                dist_moy += poids_[c]*dist_[c];
-                sum_poids += poids_[c];
-        }
-
-        dist_moy /= sum_poids;
-
-        for (int c = 0; c < neighborhood_.size(); c++) {
-                vec normalized = dist_[c]-dist_moy;
-                J(0) = poids_[c] * (normalized(0) * cos(theta) * cos(phi)    + normalized(1) * cos(theta) * sin(phi) + normalized(2) * (-sin(theta)));
-                J(1) = poids_[c] * (normalized(0) * sin(theta) * (-sin(phi)) + normalized(1) * sin(theta) * cos(phi));
-                r = poids_[c] * normal.dot(normalized);
-                JTJ += J * J.transpose();
-                JTr += J * r;
-                error += r*r ;
-
-                float er = normal.dot(normalized)*normal.dot(normalized);
-                poids_[c] = sqrt(weigh[c])*mu / (er+ mu);
-        }
-
-        Eigen::MatrixXd result(nvariable, 1);
-        result = -JTJ.llt().solve(JTr);
-
-        theta = theta + result(0);
-        phi = phi + result(1);
-
-        normal(0) = sin(theta) * cos(phi);
-        normal(1) = sin(theta) * sin(phi);
-        normal(2) = cos(theta);
-
-        error = sqrt(error / sum_poids);
-        if(itr != 1)
-            diff = abs(tmp - error);
-
-        tmp = error;
-
-        if(diff<0.0000001)
-                ++p;
-
-        ++itr;
-    }
-
-
-    float sens = normal.dot(pt);
-    if(sens>0)
-        normal=-normal;
-
-    *mu_init = mu;
-
-    phi = atan2(normal(1),normal(0));
-    theta = acos(normal(2));
-
-    return error;
-}
 
 //get average point of the neighborhood
 
-template<typename vec>
-vec CApp<vec>::getVecMoy()
+Eigen::Vector3f CApp::getVecMoy()
 {
     return moy_;
 }
@@ -1179,8 +568,7 @@ vec CApp<vec>::getVecMoy()
 
 //get actual normal
 
-template<typename vec>
-vec CApp<vec>::getNormal()
+Eigen::Vector3f CApp::getNormal()
 {
     return normal;
 }
@@ -1188,18 +576,28 @@ vec CApp<vec>::getNormal()
 
 //optional : set the new point (when optimizing position) as reference to be used in further normal computation (better if not needed
 
-template<typename vec>
-void CApp<vec>::setRef( int ref)
+void CApp::setRef( int ref)
 {
     ref_ = ref;
-    pt = pointcloud_[ref];
+    pt = pointcloud_->at(ref);
+}
+
+void CApp::actuNormal( float phi_new, float theta_new)
+{
+    phi = phi_new;
+    theta = theta_new;
+    if(theta == 0)
+        theta = theta_min;
+
+    normal(0) = sin(theta) * cos(phi);
+    normal(1) = sin(theta) * sin(phi);
+    normal(2) = cos(theta);
 }
 
 
 //get actual point
 
-template<typename vec>
-vec CApp<vec>::getPoint()
+Eigen::Vector3f CApp::getPoint()
 {
     return pt;
 }
@@ -1207,8 +605,7 @@ vec CApp<vec>::getPoint()
 
 // put the actual error (projection of p_ip_0 on normal) of each point in a vector in parameters
 
-template<typename vec>
-void CApp<vec>::getError(std::vector<float>* error)
+void CApp::getError(std::vector<float>* error)
 {
     std::vector<float> err(neighborhood_.size());
     setRef(ref_);
@@ -1223,14 +620,13 @@ void CApp<vec>::getError(std::vector<float>* error)
 
 // put the actual error (cos(angle) between p_ip_0 and normal) of each point in a vector
 
-template<typename vec>
-void CApp<vec>::getErrorNormalized(std::vector<float>* error)
+void CApp::getErrorNormalized(std::vector<float>* error)
 {
     std::vector<float> err(neighborhood_.size());
     ComputeDist();
     for (int c = 0; c < neighborhood_.size(); c++)
     {
-        vec normalized = dist_[c]/dist_[c].norm();
+        Eigen::Vector3f normalized = dist_[c]/dist_[c].norm();
         err[c] = normal.dot(normalized);
     }
     *error=err;
@@ -1239,11 +635,10 @@ void CApp<vec>::getErrorNormalized(std::vector<float>* error)
 
 //compute average projection of p_ip_0 on normal
 
-template<typename vec>
-float CApp<vec>::getMoy()
+float CApp::getMoy()
 {
     ComputeDist();
-    vec pt_moy = vec::Zero();
+    Eigen::Vector3f pt_moy = Eigen::Vector3f::Zero();
     for (int c = 0; c < neighborhood_.size(); c++)
     {
         pt_moy += neighborhood_[c];
@@ -1264,8 +659,7 @@ float CApp<vec>::getMoy()
      return proj_moy;
 }
 
-template<typename vec>
-void CApp<vec>::getImpact(float error_thresh, int *impact, float *sum)
+void CApp::getImpact(int *impact, float *sum)
 {
     float imp = 0;
     std::vector<float> error;
@@ -1275,7 +669,7 @@ void CApp<vec>::getImpact(float error_thresh, int *impact, float *sum)
     float sum_error = 0;
     float sum_poids = 0;
 
-    for(int j = 0; j<neighborhood_.size(); ++j)//---------------------------------------------------------------------------------------------
+    for(int j = 0; j<neighborhood_.size(); ++j)
     {
         if(poids_[j]>0.6)
         {
@@ -1286,7 +680,7 @@ void CApp<vec>::getImpact(float error_thresh, int *impact, float *sum)
     }
 
     *impact = imp;
-//    *sum = sum_error/imp;
+
     if(sum_poids>0)
     {
         *sum = sum_error/sum_poids;
@@ -1297,8 +691,7 @@ void CApp<vec>::getImpact(float error_thresh, int *impact, float *sum)
 
 //writeNormal in file
 
-template<typename vec>
-void CApp<vec>::writeNormal(const char* filepath)
+void CApp::writeNormal(const char* filepath)
 {
     std::ofstream fout(filepath, std::ofstream::app);
 
@@ -1321,8 +714,7 @@ void CApp<vec>::writeNormal(const char* filepath)
 
 //write neighbors in file
 
-template<typename vec>
-void CApp<vec>::writeNeighbors(std::string filepath)
+void CApp::writeNeighbors(std::string filepath)
 {
     std::ofstream fout(filepath, std::ofstream::app);
 
@@ -1343,8 +735,7 @@ void CApp<vec>::writeNeighbors(std::string filepath)
 
 //write errors in file
 
-template<typename vec>
-void CApp<vec>::writeErrors(std::string filepath)
+void CApp::writeErrors(std::string filepath)
 {
     std::ofstream fout(filepath, std::ofstream::app);
 
@@ -1364,88 +755,39 @@ void CApp<vec>::writeErrors(std::string filepath)
 }
 
 //set Normal
-
-template<typename vec>
-void CApp<vec>::setNormal(vec norm)
+void CApp::setNormal(Eigen::Vector3f norm)
 {
     normal = norm;
+    phi = atan2(normal(1),normal(0));
+    theta = acos(normal(2));
+    if(theta == 0)
+        theta = theta_min;
 }
 
 
 //set point as reference
 
-template<typename vec>
-void CApp<vec>::setPoint(vec point)
+void CApp::setPoint(Eigen::Vector3f point)
 {
     pt = point;
 }
 
-template<typename vec>
-void CApp<vec>::select_normal(int* impact, int impact1, float sum_error, float sum_error1, vec& normal_first2, vec& normal_second2, vec& point_first, vec& point_second)
+void CApp::select_normal(int* impact, int impact1, float sum_error, float sum_error1, Eigen::Vector3f& normal_first2, Eigen::Vector3f& normal_second2, Eigen::Vector3f& point_first, Eigen::Vector3f& point_second)
 {
-//    if(impact1-*impact>15)  //res1<res && impact1>impact sum_error>sum_error1 sup1<sup  // si l'erreur des points qui participent est plus faible dans la deuxième séparation
-//    {
-//        normal = normal_second2;
-////        *impact = impact1;
-//    }
-//    else if (*impact-impact1>15)
-//    {
-//        normal = normal_first2;
-//        setNormal(normal);
-//    }
-//    else if(sum_error1>sum_error)
-//    {
-//        normal = normal_first2;
-//        setNormal(normal);
-//    }
-//    else
-//    {
-//        normal = normal_second2;
-////        *impact = impact1;
-//    }
-////-----------------------------------------------------------------------------------------------------------------------
-//    if(*impact<(int)(0.1*neighborhood_.size()))
-//    {
-//        normal = normal_second2;
-//        setPoint(point_second);
-//    }
-//    else if (impact1<(int)(0.1*neighborhood_.size()))
-//    {
-//        normal = normal_first2;
-//        setNormal(normal);
-//        setPoint(point_first);
-//    }
-//    else if(sum_error1>sum_error)
-//    {
-//        normal = normal_first2;
-//        setNormal(normal);
-//        setPoint(point_first);
-//    }
-//    else
-//    {
-//        normal = normal_second2;
-//        setPoint(point_second);
-//    }
-
-    //-----------------------------------------------------------------------------------------------------------------------
-        if(sum_error1>sum_error)
-        {
-            normal = normal_first2;
-            pt = point_first;
-        }
-        else
-        {
-            normal = normal_second2;
-            pt = point_second;
-        }
+    if(sum_error<sum_error1)
+    {
+        normal = normal_first2;
+        pt = point_first;
+    }
+    else
+    {
+        normal = normal_second2;
+        pt = point_second;
+    }
 }
 
 
-template<typename vec>
-std::vector<vec> CApp<vec>::getNeighborhood()
+std::vector<Eigen::Vector3f> CApp::getNeighborhood()
 {
     return neighborhood_;
 }
-
-template class CApp<Eigen::Vector2f>;
-template class CApp<Eigen::Vector3f>;

@@ -1,31 +1,3 @@
-// ----------------------------------------------------------------------------
-// -                       Fast Global Registration                           -
-// ----------------------------------------------------------------------------
-// The MIT License (MIT)
-//
-// Copyright (c) Intel Corporation 2016
-// Qianyi Zhou <Qianyi.Zhou@gmail.com>
-// Jaesik Park <syncle@gmail.com>
-// Vladlen Koltun <vkoltun@gmail.com>
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-// IN THE SOFTWARE.
-// ----------------------------------------------------------------------------
 #include <vector>
 #include <flann/flann.hpp>
 
@@ -39,63 +11,76 @@
 #include "/usr/local/include/Eigen/Eigen"
 #include "/usr/local/include/Eigen/Eigenvalues"
 
-//using namespace Eigen;
 using namespace std;
 
-template<typename vec>
+const float lim_error = 1e-5;       // to stop optimize when not moving
+const float lim_diff = 1e-7;        // to stop optimize when not moving
+const float thresh_weigh = 0.7;     // weigh threshold value for neighbors when moving point with mean projection of neighbors
+const float mu_max = 1.0;           // mu when starting optimize for the first time
+const float epsilon = 1e-10;        // small value for initializations of comparisons
+const int itr_min = 50;           //
+const float coeff_sigma = 3;        // sigma for distance weigh = coeff_sigma*farthestePoint
+const float theta_min = 0.00001;    // because theta can not be 0 for phi to make sense
+const float init2_accuracy = 50;    // number of vectors tested (maybe decrease to gain time)
+const float N_hist = 10;            // number of bins used to find the 2nd initialization
+const float itr_opti_pos_plan = 30; // number of iterations to optimize position of point in plane
+const int itr_per_mu = 2;
+
 class CApp{
 public:    
     int Read(const char* filepath);
     void setRef (int ref);
-    void setPoint(vec point);
-    vec getPoint ();
+    void setPoint(Eigen::Vector3f point);
+    Eigen::Vector3f getPoint ();
     int get_N_neigh();
     void ComputeDist();
     void SearchFLANNTree(flann::Index<flann::L2<float>>* index,
-                                vec& input,
+                                Eigen::Vector3f& input,
                                 std::vector<int>& indices,
                                 std::vector<float>& dists,
                                 int nn);
     void selectNeighbors(int neigh_number);
-    void setNormal(vec norm);
+    void setNormal(Eigen::Vector3f norm);
     void getError(std::vector<float>* error);
     void getErrorNormalized(std::vector<float>* error);
-    vec getNormal();
-    std::vector<vec> getNeighborhood();
+    Eigen::Vector3f getNormal();
+    std::vector<Eigen::Vector3f> getNeighborhood();
     float getMoy();
-    void getImpact(float error_thresh, int *impact, float *sum);
+    void getImpact(int *impact, float *sum);
     void pca(Eigen::Vector3f &dir0, Eigen::Vector3f &dir1, Eigen::Vector3f &dir2);
-    float Optimize(float div_fact, float lim_mu, double* mu_init, bool normalize);
-    float OptimizePos(int it);
-    float OptimizePos1(float div_fact, float lim_mu, double* mu_init);
-    float OptimizePos2(float div_fact, float lim_mu, double* mu_init);
-    float Refine(float div_fact, float lim_mu, double* mu_init);
+    void Optimize(float div_fact, float lim_mu, double* mu_init);
+    void OptimizePos(int it);
+    void OptimizePos1(float div_fact, float lim_mu, double* mu_init);
     void writeNormal(const char* filepath);
     void writeNeighbors(std::string filepath);
     void writeErrors(std::string filepath);
     void addSymmetricDist();
     void buildTree();
-    vec getVecMoy();
+    Eigen::Vector3f getVecMoy();
     void initNormal();
-    void select_normal(int* impact, int impact1, float sum_error, float sum_error1, vec &normal_first2, vec &normal_second2, vec& point_first, vec& point_second);
+    void select_normal(int* impact, int impact1, float sum_error, float sum_error1, Eigen::Vector3f &normal_first2, Eigen::Vector3f &normal_second2, Eigen::Vector3f& point_first, Eigen::Vector3f& point_second);
     void getEdgeDirection(int it);
+    void setTree(flann::Index<flann::L2<float>> *t);
+    void setPc(std::vector<Eigen::Vector3f> *pc);
 
 
 private:
 	// containers
-    std::vector<vec> pointcloud_;
-    std::vector<vec> neighborhood_;
+    std::vector<Eigen::Vector3f> *pointcloud_;
+    flann::Index<flann::L2<float>>* tree_;
+    std::vector<Eigen::Vector3f> neighborhood_;
     std::vector<float> poids_;
-    std::vector<vec> dist_;
+    std::vector<Eigen::Vector3f> dist_;
     int ref_;
-    vec pt;
-    vec normal;
+    Eigen::Vector3f pt;
+    Eigen::Vector3f normal;
     float theta;
     float phi;
     std::vector<float> error_;
     std::vector<float> diff_poids_;
     std::vector<float> diff_error_;
-    flann::Index<flann::L2<float>>* tree_;
-    vec moy_;
-    void ComputeWeighs(bool normalize, double mu, bool use_last);   
+    Eigen::Vector3f moy_;
+    void ComputeWeighs(double mu);
+    void ComputeWeighs_proj(double mu);
+    void actuNormal( float phi_new, float theta_new);
 };

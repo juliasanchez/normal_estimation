@@ -21,13 +21,18 @@
 #include <fstream>
 #include <chrono>
 #include <omp.h>
-#include "app.h"
 
+#include "app.h"
+#include "cloud.h"
+
+const float likelihood_threshold = 0.95; // value for evaluation/comparison between vectors
+const float noise_min = 0.0001; // minimum noise to make it not infinite
 
 void initFile(std::string file_name);
+void write(std::string file_name, std::vector<Eigen::Vector3f> points, std::vector<Eigen::Vector3f>  normals);
 
 int main(int argc, char *argv[])
-{
+{   
     if (argc != 11)
     {
         printf("./FastGlobalRegistration [pointcloud] [lim_mu] [neighbors number] [div_fact] [noise] [lim_mu_pos] [optimize_pos?] [with_symmetrics?] [output_file] [Ref]\n");
@@ -41,19 +46,15 @@ int main(int argc, char *argv[])
         }
     }
 
-    CApp<Eigen::Vector3f> app;
-    int cloud_size = app.Read(argv[1]);
-    app.buildTree();
+    cloud c;
+    int cloud_size = c.Read(argv[1]);
+    c.buildTree();
 
-    bool display = true;
+    std::vector<Eigen::Vector3f>* pc = c.getPC();
+    flann::Index<flann::L2<float>>* tree = c.getTree();
 
-    auto t_tot1 = std::chrono::high_resolution_clock::now();
     int n_neigh = atoi(argv[3]);
     float div_fact = atof(argv[4]);
-    double mu_init = 1.0;
-    double mu_init1 = 0;
-    float sum_error = 0;
-    float sum_error1 = 0;
     char* output = argv[9];
 
 
@@ -62,15 +63,24 @@ int main(int argc, char *argv[])
     vector<Eigen::VectorXf> ref;
     if (fin.is_open())
     {
-        std::string dechet;
-        for (int i=0; i<6; ++i)
-        fin>>dechet;
+        string test;
+        std::getline ( fin, test, '\n' );
 
-        while (!fin.eof())
+        while (std::getline ( fin, test, ',' ))
         {
-            Eigen::VectorXf pt (6);
-            for (int i=0; i<pt.size(); ++i)
-                fin >> pt(i);
+            Eigen::VectorXf pt(6);
+            pt(0) = stof(test);
+            std::getline ( fin, test, ',' );
+            pt(1) = stof(test);
+            std::getline ( fin, test, ',' );
+            pt(2) = stof(test);
+            std::getline ( fin, test, ',' );
+            pt(3) = stof(test);
+            std::getline ( fin, test, ',' );
+            pt(4) = stof(test);
+            std::getline ( fin, test, '\n' );
+            pt(5) = stof(test);
+
             ref.push_back(pt);
         }
         fin.close();
@@ -79,61 +89,50 @@ int main(int argc, char *argv[])
     {
        std::cout<<"did not find file"<<std::endl<<std::endl;
     }
-        float res;
-        float res1;
+
         int n = 0;
-        int k = 0;
-        int p = 0;
-        int o = 0;
         int nan = 0;
         int caca = 0;
-        int edge_not_detected = 0;
-        int plane_processed = 0;
-        float temp = 10000000;
         float noise = atof(argv[5]);
-        float resolution = 0.0025;//0.03; // 0.0025;
+        float resolution = 0.0025;
         float lim_mu = atof(argv[2]);
         float lim_mu_pos = atof(argv[6]);
         float er_supposed;
         float dist_moy = (sqrt((float)(n_neigh))/2.0)*resolution;
         er_supposed = noise/sqrt(noise*noise + dist_moy*dist_moy);
 
-        if(lim_mu < 1e-10)
+        if(lim_mu < epsilon)
         {
             lim_mu = noise * (1 + 1/sqrt( (dist_moy/2)*(dist_moy/2) + (2*noise)*(2*noise) ));
         }
 
-        if(lim_mu_pos < 1e-10)
+        if(lim_mu_pos < epsilon)
         {
             lim_mu_pos = pow(noise,2);
         }
 
-
-    initFile(output);
-    initFile("wrong_normals.csv");
-    initFile("1st_choice.csv");
-    initFile("2nd_choice.csv");
-    initFile("1st_global_min.csv");
-    initFile("2nd_global_max.csv");
-    initFile("global_min.csv");
-    initFile("true_normals.csv");
-    initFile("normals_bords.csv");
-    initFile("moy_bord.csv");
-    initFile("edge_direction.csv");
+    std::vector<Eigen::Vector3f> normals(cloud_size);
+    std::vector<Eigen::Vector3f> points(cloud_size);
+    std::vector<Eigen::Vector3f> wrong_normals;
+    std::vector<Eigen::Vector3f> wrong_points;
 
     std::cout<<"computing normals"<<std::endl<<std::endl;
+    auto t_tot1 = std::chrono::high_resolution_clock::now();
 
 
-    /// --------------------------------------------LOOP------------------------------------------------------------------------------------
-    /// ------------------------------------------------------------------------------------------------------------------------------------
-    /// ------------------------------------------------------------------------------------------------------------------------------------
-    /// ------------------------------------------------------------------------------------------------------------------------------------
-    ///
+//    /// --------------------------------------------LOOP------------------------------------------------------------------------------------
+//    /// ------------------------------------------------------------------------------------------------------------------------------------
+//    /// ------------------------------------------------------------------------------------------------------------------------------------
+//    /// ------------------------------------------------------------------------------------------------------------------------------------
+//    ///
 
-//    #pragma omp parallel for schedule(dynamic) num_threads(omp_get_max_threads()) private(app,n,k,p,o) shared(noise, ref, n_neigh, div_fact, lim_mu, lim_mu_pos it, mu_init)
-    for (int i = 0; i < cloud_size; ++i ) // 23467
+    #pragma omp parallel for schedule(dynamic) num_threads(omp_get_max_threads()) shared(pc, tree, noise, n_neigh, div_fact, lim_mu, lim_mu_pos, normals, points)
+    for (int i = 0; i < cloud_size; ++i )
     {
-        Eigen::Vector3f normal= Eigen::Vector3f::Zero();
+        CApp app;
+        app.setTree(tree);
+        app.setPc(pc);
+        app.setRef(i);
         Eigen::Vector3f normal_first0 = Eigen::Vector3f::Zero();
         Eigen::Vector3f normal_first1 = Eigen::Vector3f::Zero();
         Eigen::Vector3f normal_first2 = Eigen::Vector3f::Zero();
@@ -141,21 +140,19 @@ int main(int argc, char *argv[])
         Eigen::Vector3f normal_second1 = Eigen::Vector3f::Zero();
         Eigen::Vector3f normal_second2 = Eigen::Vector3f::Zero();
 
-        Eigen::Vector3f point;
         Eigen::Vector3f point_first = Eigen::Vector3f::Zero();
         Eigen::Vector3f point_second = Eigen::Vector3f::Zero();
 
         int impact = 0;
-
         int impact1 = 0;
+        float sum_error = 0;
+        float sum_error1 = 0;
         app.setRef(i);
-        Eigen::Vector3f point_ref = app.getPoint();
-        app.selectNeighbors(n_neigh); 
+
+        app.selectNeighbors(n_neigh);
         app.ComputeDist();
 
         /////////////////////////////////////////////////////////////
-        /// PCA for max and min of variance initialization of normal
-        ///
 
          Eigen::Vector3f dir0;
          Eigen::Vector3f dir1;
@@ -166,176 +163,126 @@ int main(int argc, char *argv[])
          normal_first0 = dir2;
          app.setNormal(normal_first0);
 
-         /////////////////////////////////////////////////////////
+         /////////////////////////////////////////////////////
 
-         float moy_error = app.getMoy(); ///////////////////////////////
-//         app.writeNormal("global_min.csv");
-
-         n_neigh = app.get_N_neigh();
-
-        if(moy_error > 2*noise + 0.0001) //2*noise -------------------------------------------------------------------------------------------------------
+        if(app.getMoy() > 1.5*noise + noise_min) // -------------------------------------------------------------------------------------------------------
         {
-            if(abs(app.getPoint()(0)-1)>0.1 || abs(app.getPoint()(1)-1)>0.1)
-                ++plane_processed;
-            mu_init = 0;
-
-            res = app.Optimize(div_fact, lim_mu, &mu_init, 1);
+            double mu_init = 0;
+            app.Optimize(div_fact, lim_mu, &mu_init);
 
             normal_first1 = app.getNormal();
 
-            if(atoi(argv[7]))
-            {
-//                res = app.Refine(div_fact, lim_mu_pos, &mu_init1);
-                res = app.OptimizePos1(div_fact, lim_mu_pos, &mu_init);
-            }
+            app.OptimizePos1(div_fact, lim_mu_pos, &mu_init);
 
             normal_first2 = app.getNormal();
             point_first = app.getPoint();
 
-            float error_thresh = noise+0.001;//(*2) (+0.001)
-            app.getImpact(error_thresh, &impact, &sum_error);
-
-            moy_error = sqrt(moy_error/n_neigh);
+            app.getImpact(&impact, &sum_error);
 
             //----------------------------------------------------------------------------------------------------
 
             app.setRef(i);
             app.ComputeDist();
-            app.setNormal(normal_first0);
+            app.setNormal(normal_first2);
 
-            app.getEdgeDirection(50);
+            app.getEdgeDirection(init2_accuracy);
 
-//            app.writeNormal("edge_direction.csv");
-            Eigen::Vector3f  normal_temp = app.getNormal().cross(normal_first0);
+            Eigen::Vector3f  normal_temp = app.getNormal().cross(normal_first2);
             normal_second0 = normal_temp/normal_temp.norm();
-//            float sens = normal_second0.dot(app.getPoint());
-//            if(sens>0)
-//                normal_second0=-normal_second0;
             app.setNormal(normal_second0);
 
-            mu_init1 = 1;
+            double mu_init1 = 1;
 
-            res1 = app.Optimize(div_fact, lim_mu, &mu_init1, 1);
+            app.Optimize(div_fact, lim_mu, &mu_init1);
 
             normal_second1 = app.getNormal();
 
-            if(atoi(argv[7]))
+            if(abs(normal_first1.dot(normal_second1))<likelihood_threshold)
             {
-//                    res1 = app.Refine(div_fact, lim_mu_pos, &mu_init1);
-                res1 = app.OptimizePos1(div_fact, lim_mu_pos, &mu_init1);
+                app.OptimizePos1(div_fact, lim_mu_pos, &mu_init1);
+                normal_second2 = app.getNormal();
+                point_second = app.getPoint();
+                app.getImpact(&impact1, &sum_error1);
+                app.select_normal(&impact, impact1, sum_error, sum_error1, normal_first2, normal_second2, point_first, point_second);
             }
-
-            normal_second2 = app.getNormal();
-            point_second = app.getPoint();
-
-            if(normal_second2.dot(normal_first2)>0.9)
-                ++p;
-
-            app.getImpact(error_thresh, &impact1, &sum_error1);
-            if(point_ref[0]>1.01 && point_ref[0]<1.015 && point_ref[1]<1.007)
-                std::cout<<"choisir point : "<<i<<std::endl<<std::endl;
-            app.select_normal(&impact, impact1, sum_error, sum_error1, normal_first2, normal_second2, point_first, point_second);
-            normal = app.getNormal();
-            point = app.getPoint();
-
-            if(impact<0.25*n_neigh)
+            else
             {
-                ++o;
+                app.setNormal(normal_first2);
+                app.setPoint(point_first); 
             }
 
             if( app.getNormal()(0) == app.getNormal()(0) )
-                app.writeNormal(output);
+                normals[i]=app.getNormal();
             else
             {
                 std::cout<<"nan normal :"<<i<<std::endl;
-                ++n;
                 ++nan;
             }
+
+
+            if( app.getPoint()(0) == app.getPoint()(0) )
+            {
+                points[i] = app.getPoint();
+            }
+            else
+            {
+                std::cout<<"nan point :"<<i<<std::endl;
+                ++nan;
+            }
+
         }
         else
         {
-            ++k;
-            if(abs(app.getPoint()(0)-1)<0.05 && abs(app.getPoint()(1)-1)<0.05)
-                ++edge_not_detected;
-            if(atoi(argv[7]))
-                app.OptimizePos(30);
+            app.OptimizePos(itr_opti_pos_plan);
 
-            normal = app.getNormal();
-            point = app.getPoint();
-
-            if( normal(0) == normal(0) )
+            if( app.getNormal()(0) == app.getNormal()(0) )
             {
-                app.writeNormal(output);
+                normals[i] = app.getNormal();
             }
             else
             {
                 std::cout<<"nan normal :"<<i<<std::endl;
-                ++n;
                 ++nan;
             }
 
-            normal_first1.setZero();
-            normal_first2.setZero();
-            normal_second0.setZero();
-            normal_second1.setZero();
-            normal_second2.setZero();
+            if( app.getPoint()(0) == app.getPoint()(0) )
+            {
+                points[i] = app.getPoint();
+            }
+            else
+            {
+                std::cout<<"nan point :"<<i<<std::endl;
+                ++nan;
+            }
         }
+    }
 
+    auto t_tot2 = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i<normals.size() ; ++i)
+    {
         Eigen::Vector3f normal_ref = {ref[i](3), ref[i](4), ref[i](5)};
-
-//        if( (abs(normal(1))>0.5 && abs(1-point(1))>abs(1-point(0))) || ( abs(normal(0))>0.5 && abs(1-point(0))>abs(1-point(1)) ) || ( abs(normal(0))<0.95 && abs(normal(1)) <0.95 ) )
-        if( (abs(normal(1))>0.5 && ref[i](1)>ref[i](0)) || ( abs(normal(0))>0.5 && ref[i](0)>ref[i](1) ) || ( abs(normal(0))<0.98 && abs(normal(1)) <0.98 ) )
+        if(abs(normal_ref.dot(normals[i]))<likelihood_threshold)
         {
-            if(display)
-                std::cout<<"wrong normal :"<<i<<"          /          "<<n<<std::endl;
             ++n;
-            app.writeNormal("wrong_normals.csv");
-
-            app.setNormal(normal_ref);
-            app.writeNormal("true_normals.csv");
-
-            app.setNormal(normal_first0);
-            app.writeNormal("1st_global_min.csv");
-
-            app.setNormal(normal_second0);
-            app.writeNormal("2nd_global_max.csv");
-
-            app.setNormal(normal_first2);
-            app.writeNormal("1st_choice.csv");
-
-            app.setNormal(normal_second2);
-            app.writeNormal("2nd_choice.csv");
+            std::cout<<"wrong normal :"<<i<<"          /          "<<n<<std::endl;
+            wrong_normals. push_back(normals[i]);
+            wrong_points. push_back(points[i]);
         }
 
-        if( abs(normal(0))<0.98 && abs(normal(1)) <0.98 && display)
+        if( abs(normals[i](0))<0.99 && abs(normals[i](1)) <0.99)
         {
             caca++;
             std::cout<<"caca :"<<i<<std::endl;
         }
-
-        if(temp>mu_init)
-            temp = mu_init;
-
-        if(i%100==0)
-            std::cout<<(float)i/(float)cloud_size*100<<" %"<<std::endl<<std::endl;
-
-        n_neigh = atoi(argv[3]);
     }
 
-      std::cout<<"last µ : "<<temp<<std::endl<<std::endl;
-
-      std::cout<<"number normals for which less than 1/4 neighbors impacted : "<<o<<std::endl<<std::endl;
-      std::cout<<"number of points on edge not detected : "<<edge_not_detected<<std::endl<<std::endl;
-      std::cout<<"perc of normals which are on plane: "<<(float)k/(float)cloud_size<<std::endl<<std::endl;
-      std::cout<<"number of points where global max failed: "<<p<<std::endl<<std::endl;
-      std::cout<<"perc normals which have not converged: "<<(double)(k)*100/cloud_size<<" % "<<std::endl<<std::endl;
-      std::cout<<"number of caca normals: "<<caca<<std::endl<<std::endl;
-      std::cout<<"number of nan normals: "<<nan<<std::endl<<std::endl;
-      std::cout<<"number of false normals : "<<n<<std::endl<<"percentage : "<<(float)(n)/(float)cloud_size<<std::endl<<std::endl;
-
-    auto t_tot2 = std::chrono::high_resolution_clock::now();
+    std::cout<<"number of caca normals: "<<caca<<std::endl<<std::endl;
+    std::cout<<"number of false normals : "<<n<<"     -------------------    "<<"percentage : "<<(float)(n)/(float)cloud_size<<std::endl<<std::endl;
     std::cout<<"total time to get normals :" <<std::chrono::duration_cast<std::chrono::milliseconds>(t_tot2-t_tot1).count()<<" milliseconds"<<std::endl<<std::endl;
 
+    write(output, points, normals);
+    write("wrong.csv", wrong_points, wrong_normals);
 
     return 0;
 }
@@ -353,3 +300,27 @@ void initFile(std::string file_name)
 }
 
 
+void write(std::string file_name, std::vector<Eigen::Vector3f> points, std::vector<Eigen::Vector3f>  normals)
+{
+    initFile(file_name);
+    std::ofstream fout(file_name, std::ofstream::app);
+
+    if (fout.is_open())
+    {
+        for (int i = 0; i<normals.size() ; ++i)
+        {
+            for (int j = 0; j<3; ++j)
+            {
+//                fout<<ref[i](j)<<",";
+                fout<<points[i](j)<<",";
+            }
+            for (int j = 0; j<3; ++j)
+            {
+                fout<<normals[i](j)<<",";
+            }
+            fout<<"\n";
+        }
+
+        fout.close();
+    }
+}
