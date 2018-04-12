@@ -17,7 +17,7 @@ using namespace std;
 class cloud{
 public:
     cloud();
-    int Read(const char* filepath);
+    int Read(std::string filepath);
     void buildTree();
     std::vector<Eigen::Vector3f>* getPC();
     flann::Index<flann::L2<float>>* getTree();

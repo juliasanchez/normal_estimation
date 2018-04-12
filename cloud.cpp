@@ -7,7 +7,7 @@ cloud::cloud()
 
 // reads file and puts it into pointcloud_
 
-int cloud::Read(const char* filepath)
+int cloud::Read(std::string filepath)
 {
     std::cout<<"reading file"<<std::endl<<std::endl;
     std::ifstream fin(filepath);

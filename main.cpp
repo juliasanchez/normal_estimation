@@ -25,12 +25,10 @@
 #include "app.h"
 #include "cloud.h"
 
-const float likelihood_threshold = 0.95; // value for evaluation/comparison between vectors
-const float noise_min = 0.0001; // minimum noise to make it not infinite
-
-void initFile(std::string file_name);
-void write(std::string file_name, std::vector<Eigen::Vector3f> points, std::vector<Eigen::Vector3f>  normals);
-void read(std::string file_name, vector<Eigen::VectorXf>& cloud);
+void initFile(std::string );
+void write(std::string , std::vector<Eigen::Vector3f> , std::vector<Eigen::Vector3f> );
+void read(std::string , vector<Eigen::VectorXf>& );
+std::string create_output_name(std::string);
 
 int main(int argc, char *argv[])
 {   
@@ -48,12 +46,11 @@ int main(int argc, char *argv[])
         }
     }
 
-    std::cout<<"reading reference : "<<argv[1]<<std::endl<<std::endl;
-    std::vector<Eigen::VectorXf> ref;
-    read(argv[10], ref);
+    //------------------------------------------------------------------------------------------------
 
     cloud c;
-    int cloud_size = c.Read(argv[1]);
+    std::string input_name = argv[1];
+    int cloud_size = c.Read(input_name);
     c.buildTree();
     float resolution = c.getResolution();
 
@@ -63,7 +60,8 @@ int main(int argc, char *argv[])
 
     int n_neigh = atoi(argv[3]);
     float div_fact = atof(argv[4]);
-    char* output = argv[9];
+
+    std::string output = create_output_name(input_name);
 
     int n = 0;
     int nan = 0;
@@ -115,136 +113,60 @@ int main(int argc, char *argv[])
     #pragma omp parallel for schedule(dynamic) num_threads(omp_get_max_threads()) shared(pc, tree, noise, n_neigh, div_fact, lim_mu, lim_mu_pos, normals, points)
     for (int i = 0; i < cloud_size; ++i)
     {
-        Eigen::Vector3f normal_first0 = Eigen::Vector3f::Zero();
-        Eigen::Vector3f normal_first1 = Eigen::Vector3f::Zero();
-        Eigen::Vector3f normal_first2 = Eigen::Vector3f::Zero();
-        Eigen::Vector3f normal_second0 = Eigen::Vector3f::Zero();
-        Eigen::Vector3f normal_second1 = Eigen::Vector3f::Zero();
-        Eigen::Vector3f normal_second2 = Eigen::Vector3f::Zero();
-
-        Eigen::Vector3f point_first = Eigen::Vector3f::Zero();
-        Eigen::Vector3f point_second = Eigen::Vector3f::Zero();
-
-
-        int impact = 0;
-        int impact1 = 0;
-        float sum_error = 0;
-        float sum_error1 = 0;
-
-        CApp app;
-        app.setTree(tree);
-        app.setPc(pc);
-        app.setRef(i);
+        CApp app(pc, tree, i, noise);
         Eigen::Vector3f point_ref = app.getPoint();
         app.selectNeighbors(n_neigh);
-        app.ComputeDist();
-        app.ComputeDistWeighs();
 
-        /////////////////////////////////////////////////////////////
+        app.init1();
 
-         app.pca();
-         normal_first0 = app.getNormal();
+        app.OptimizePos(itr_opti_pos_plan);
 
-         /////////////////////////////////////////////////////
-
-         app.OptimizePos(itr_opti_pos_plan);
-
-         float moy_proj = abs(app.getMoy());
-
-        if( moy_proj > (noise) ) // -------------------------------------------------------------------------------------------------------
+        if( app.isOnEdge() ) // when the projection error is greater than the noise-------------------------------------------------------------------------------------------------------
         {
-            app.setRef(i);
-            app.setNormal(normal_first0);
-            app.ComputeDist();
-            double mu_init = 0;
-            app.Optimize(div_fact, lim_mu, &mu_init);
+            //Compute first solution ------------------------------------------------------------------------------------------------------
 
-//            app.setNormal(normal_first0);
-            bool convert_mu = true;
+            app.reinitPoint();
+            app.reinitFirst0();
+            app.setParams(div_fact, lim_mu, lim_mu_pos);
 
-            normal_first1 = app.getNormal();
+            bool first = true;
+            app.Optimize(first);
+            app.OptimizePos1(first);
 
-            app.OptimizePos1(div_fact, lim_mu_pos, &mu_init, convert_mu);
+            //Compute second solution ------------------------------------------------------------------------------------------------------
 
-            normal_first2 = app.getNormal();
-            point_first = app.getPoint();
+            app.reinitPoint();
 
-            app.getImpact(&impact, &sum_error);
+            app.init2();
+            first = false;
+            app.Optimize(first);
+            app.OptimizePos1(first);
 
-            app.setRef(i);
-            app.ComputeDist();
-            app.setNormal(normal_first2);
+            //save result ------------------------------------------------------------------------------------------------------
 
-            app.getEdgeDirection(init2_accuracy);
-
-            Eigen::Vector3f  normal_temp = app.getNormal().cross(normal_first2);
-            normal_second0 = normal_temp/normal_temp.norm();
-            app.setNormal(normal_second0);
-
-            double mu_init1 = 1;
-            app.Optimize(div_fact, lim_mu, &mu_init1);
-            convert_mu = true;
-
-//            double mu_init1 = 10*lim_mu_pos;
-//            convert_mu = false;
-
-            normal_second1 = app.getNormal();
-
-            if(abs(normal_first1.dot(normal_second1))<likelihood_threshold)
+            if( !app.isNan())
             {
-                app.OptimizePos1(div_fact, lim_mu_pos, &mu_init1, convert_mu);
-                normal_second2 = app.getNormal();
-                point_second = app.getPoint();
-                app.getImpact(&impact1, &sum_error1);
-                app.select_normal(impact, impact1, sum_error, sum_error1, normal_first2, normal_second2, point_first, point_second);
+                normals[i] = app.finalNormal_;
+                points[i] = app.finalPos_;
             }
             else
             {
-                app.setNormal(normal_first2);
-                app.setPoint(point_first); 
-            }
-
-            if( app.getNormal()(0) == app.getNormal()(0) )
-                normals[i]=app.getNormal();
-            else
-            {
-                std::cout<<"nan normal :"<<i<<std::endl;
+                normals[i]={0,0,0};
+                points[i] = {0,0,0};
+                std::cout<<"nan normal or point :"<<i<<std::endl;
                 ++nan;
             }
-
-
-            if( app.getPoint()(0) == app.getPoint()(0) )
-            {
-                points[i] = app.getPoint();
-            }
-            else
-            {
-                std::cout<<"nan point :"<<i<<std::endl;
-                ++nan;
-            }
-
         }
         else
         {
-//            app.OptimizePos(itr_opti_pos_plan);
-
-            if( app.getNormal()(0) == app.getNormal()(0) )
+            if( !app.isNan())
             {
-                normals[i] = app.getNormal();
+                normals[i] = app.finalNormal_;
+                points[i] = app.finalPos_;
             }
             else
             {
-                std::cout<<"nan normal :"<<i<<std::endl;
-                ++nan;
-            }
-
-            if( app.getPoint()(0) == app.getPoint()(0) )
-            {
-                points[i] = app.getPoint();
-            }
-            else
-            {
-                std::cout<<"nan point :"<<i<<std::endl;
+                std::cout<<"nan normal or point :"<<i<<std::endl;
                 ++nan;
             }
         }
@@ -257,6 +179,10 @@ int main(int argc, char *argv[])
     }
 
     auto t_tot2 = std::chrono::high_resolution_clock::now();
+
+    std::cout<<"reading reference : "<<input_name<<std::endl<<std::endl;
+    std::vector<Eigen::VectorXf> ref;
+    read(argv[10], ref);
 
 //    for (int i = idx; i<idx+1 ; ++i)
     for (int i = 0; i<normals.size(); ++i)
@@ -294,6 +220,40 @@ int main(int argc, char *argv[])
     return 0;
 }
 
+
+
+
+
+
+
+
+//____________________________________________________________- I/O FUNCTIONS -___________________________________________________________
+
+
+
+
+
+
+
+
+
+
+std::string create_output_name(std::string input_name)
+{
+    size_t lastindex_point = input_name.find_last_of(".");
+    lastindex_point -= 6;
+    size_t lastindex_slash = input_name.find_last_of("/");
+    if (lastindex_slash==std::string::npos)
+    {
+       lastindex_slash = 0;
+    }
+
+    input_name = input_name.substr(lastindex_slash+1, lastindex_point-(lastindex_slash+1));
+    std::stringstream stm;
+    stm.str("");
+    stm<<"../"<<input_name<<"result.csv";
+    return stm.str();
+}
 
 void initFile(std::string file_name)
 {
@@ -364,3 +324,38 @@ void read(std::string file_name, vector<Eigen::VectorXf>& cloud)
        std::cout<<"did not find file"<<std::endl<<std::endl;
     }
 }
+
+//bool isPointOutside()
+//{
+//    app.setPoint(points[i]);
+//    float moy_proj1 = 0;
+//    float moy_proj2 = 0;
+//    float sum_poids = 0;
+//    for(int c = 0; c< neighborhood_.size(); ++c)
+//    {
+//        if(poids_[c]> thresh_weigh)
+//        {
+//            moy_proj1 += poids_[c] * normal.dot(dist_[c]);
+//            sum_poids += poids_[c] ;
+//        }
+
+//        moy_proj1 /= sum_poids;
+
+//        sum_poids = 0;
+
+//        if(poids_[c]< 0.1)
+//        {
+//            moy_proj2 += normal.dot(dist_[c]);
+//            ++sum_poids;
+//        }
+
+//        moy_proj2 /= sum_poids;
+//    }
+
+
+
+//    if(moy_proj1>-0.005 || moy_proj2>-0.005)
+//        return false;
+
+//    return true;
+//}

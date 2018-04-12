@@ -19,7 +19,7 @@ const float lim_error = 1e-5;       // to stop optimize when not moving
 const float lim_diff = 1e-7;        // to stop optimize when not moving
 const float theta_min = 1e-10;    // because theta can not be 0 for phi to make sense
 
-const float thresh_weigh = 0.6;//0.5;//0.5;     // weigh threshold value for neighbors when moving point with mean projection of neighbors
+const float thresh_weigh = 0.6;//0.6;     // weigh threshold value for neighbors when moving point with mean projection of neighbors
 const float impacter_weigh = 0.6;//0.7;//0.8;   // weigh threshold for computing error and evaluate/select normals
 const float mu_max = 1.0;           // mu when starting optimize for the first time
 const int itr_min = 50;           //
@@ -28,16 +28,118 @@ const float init2_accuracy = 20;    // number of vectors tested to get edge dire
 const float N_hist = 10;            // number of bins used to find the 2nd initialization
 const float itr_opti_pos_plan = 30; // number of iterations to optimize position of point in plane
 const int itr_per_mu = 1;
-const float lim_impacters = 0.25;
+const float lim_impacters = 0.1;
 const float opti_threshold = 0.005;
+const float noise_min = 0.0001; // minimum noise to make it not infinite
+const float likelihood_threshold = 0.95; // value for evaluation/comparison between vectors
 
 class CApp{
-public:    
-    int Read(const char* filepath);
+public:
+    CApp()
+    {
+        std::cout<<"add one pointcloud + its kdtree + the reference point you want to compute the normal on"<<std::endl<<std::endl;
+        normalFirst0_ = NULL;
+        normalFirst1_ = NULL;
+        normalFirst2_ = NULL;
+        normalSecond0_ = NULL;
+        normalSecond1_ = NULL;
+        normalSecond2_ = NULL;
+        pointFirst_ = NULL;
+        pointSecond_ = NULL;
+    };
+
+    CApp(std::vector<Eigen::Vector3f>*pc, flann::Index<flann::L2<float>>* tree, float noise)
+    {
+        setPc(pc);
+        setTree(tree);
+        noise_ = noise;
+        normalFirst0_ = NULL;
+        normalFirst1_ = NULL;
+        normalFirst2_ = NULL;
+        normalSecond0_ = NULL;
+        normalSecond1_ = NULL;
+        normalSecond2_ = NULL;
+        pointFirst_ = NULL;
+        pointSecond_ = NULL;
+    };
+
+    CApp(std::vector<Eigen::Vector3f>*pc, flann::Index<flann::L2<float>>* tree, int ref, float noise)
+    {
+        setPc(pc);
+        setTree(tree);
+        setRef(ref);
+        noise_ = noise;
+        normalFirst0_ = NULL;
+        normalFirst1_ = NULL;
+        normalFirst2_ = NULL;
+        normalSecond0_ = NULL;
+        normalSecond1_ = NULL;
+        normalSecond2_ = NULL;
+        pointFirst_ = NULL;
+        pointSecond_ = NULL;
+    };
+
+    CApp(float divFact, float limMu, float limMuPos, std::vector<Eigen::Vector3f>*pc, flann::Index<flann::L2<float>>* tree, int ref, float noise)
+    {
+        divFact_ = divFact;
+        limMu_ = limMu;
+        limMuPos_ = limMuPos;
+        noise_ = noise;
+        setPc(pc);
+        setTree(tree);
+        setRef(ref);
+        normalFirst0_ = NULL;
+        normalFirst1_ = NULL;
+        normalFirst2_ = NULL;
+        normalSecond0_ = NULL;
+        normalSecond1_ = NULL;
+        normalSecond2_ = NULL;
+        pointFirst_ = NULL;
+        pointSecond_ = NULL;
+
+    };
+
+    ~CApp()
+    {
+        if(normalFirst0_!= NULL)
+            delete normalFirst0_;
+        if(normalFirst1_!= NULL)
+            delete normalFirst1_;
+        if(normalFirst2_!= NULL)
+            delete normalFirst2_;
+        if(normalSecond0_!= NULL)
+            delete normalSecond0_;
+        if(normalSecond1_!= NULL)
+            delete normalSecond1_;
+        if(normalSecond2_!= NULL)
+            delete normalSecond2_;
+        if(pointFirst_!= NULL)
+            delete pointFirst_;
+        if(pointSecond_!= NULL)
+            delete pointSecond_;
+    };
+
+    void setTree(flann::Index<flann::L2<float>> *t);
+    void setPc(std::vector<Eigen::Vector3f> *pc);
     void setRef (int ref);
+    void setNormal(Eigen::Vector3f norm);
     void setPoint(Eigen::Vector3f point);
+    void setLimMu ( float limMu){limMu_ = limMu;};
+    void setLimMuPos ( float limMuPos){limMuPos_ = limMuPos;};
+    void setDivFact ( float divFact){divFact_= divFact;};
+    void setNoise ( float noise){noise_= noise;};
+    void setParams(float divFact, float limMu, float limMuPos)
+    {
+        limMu_ = limMu;
+        limMuPos_ = limMuPos;
+        divFact_= divFact;
+    };
+    Eigen::Vector3f getNormal();
     Eigen::Vector3f getPoint ();
+    std::vector<Eigen::Vector3f> getNeighborhood();
     int get_N_neigh();
+
+    void reinitPoint();
     void ComputeDist();
     void SearchFLANNTree(flann::Index<flann::L2<float>>* index,
                                 Eigen::Vector3f& input,
@@ -45,46 +147,68 @@ public:
                                 std::vector<float>& dists,
                                 int nn);
     void selectNeighbors(int neigh_number);
-    void setNormal(Eigen::Vector3f norm);
-    Eigen::Vector3f getNormal();
-    std::vector<Eigen::Vector3f> getNeighborhood();
-    float getMoy();
-    void getImpact(int *impact, float *sum);
-    void pca();
-    void Optimize(float div_fact, float lim_mu, double* mu_init);
+
+    void init1();
+    void reinitFirst0();
+    void setFirst2();
+    void init2();
+    void Optimize(bool first);
     void OptimizePos(int it);
-    void OptimizePos1(float div_fact, float lim_mu, double* mu_init, bool convert_mu);
-    void writeNormal(const char* filepath);
-    void writeNeighbors(std::string filepath);
-    void writeErrors(std::string filepath);
-    void addSymmetricDist();
-    void buildTree();
-    void select_normal(int impact, int impact1, float sum_error, float sum_error1, Eigen::Vector3f &normal_first2, Eigen::Vector3f &normal_second2, Eigen::Vector3f& point_first, Eigen::Vector3f& point_second);
+    void OptimizePos1(bool first);
     void getEdgeDirection(int it);
-    void setTree(flann::Index<flann::L2<float>> *t);
-    void setPc(std::vector<Eigen::Vector3f> *pc);
-    std::vector<Eigen::Vector3f> neighborhood_;
-    std::vector<float> poids_;
-    void ComputeDistWeighs();
-    void ComputeTotalError(std::vector<float>& er_tot);
+    void evaluate(int *impact, float *moyError);
+    void select_normal();
+    void addSymmetricDist();
+    bool isOnEdge();
+    bool isSecondOption();
+
+
+
+    bool isNan();
+    Eigen::Vector3f finalNormal_;
+    Eigen::Vector3f finalPos_;
 
 
 private:
 	// containers
+    float mu_;
+    float noise_;
+    float limMu_;
+    float limMuPos_;
+    float divFact_;
     std::vector<Eigen::Vector3f> *pointcloud_;
     flann::Index<flann::L2<float>>* tree_;
+    std::vector<Eigen::Vector3f> neighborhood_;
     std::vector<Eigen::Vector3f> dist_;
     std::vector<float> dist_weighs_;
     int ref_;
     Eigen::Vector3f pt;
+    Eigen::Vector3f ptRef_;
     Eigen::Vector3f normal;
+    Eigen::Vector3f* normalFirst0_;
+    Eigen::Vector3f* normalFirst1_;
+    Eigen::Vector3f* normalFirst2_;
+    Eigen::Vector3f* normalSecond0_;
+    Eigen::Vector3f* normalSecond1_;
+    Eigen::Vector3f* normalSecond2_;
+    Eigen::Vector3f* pointFirst_;
+    Eigen::Vector3f* pointSecond_;
     float theta;
     float phi;
+    std::vector<float> poids_;
     std::vector<float> error_;
     std::vector<float> diff_error_;
-    void ComputeWeighs(double mu);
-    void ComputeWeighs_proj(double mu);
+    void ComputeDistWeighs();
+    void ComputeWeighs();
+    void ComputeWeighs_proj();
     void actuNormal( float phi_new, float theta_new);
+    void ComputeTotalError(std::vector<float>& er_tot);
+    void actualizeMu();
     void orient();
     void save_itr(int itr);
+    int impactFirst_;
+    int impactSecond_;
+    float moyErrorFirst_;
+    float moyErrorSecond_;
+
 };
