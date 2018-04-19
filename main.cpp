@@ -28,7 +28,7 @@
 void initFile(std::string );
 void write(std::string , std::vector<Eigen::Vector3f> , std::vector<Eigen::Vector3f> );
 void read(std::string , vector<Eigen::VectorXf>& );
-std::string create_output_name(std::string);
+std::string create_output_name(std::string, int);
 
 int main(int argc, char *argv[])
 {   
@@ -61,29 +61,16 @@ int main(int argc, char *argv[])
     int n_neigh = atoi(argv[3]);
     float div_fact = atof(argv[4]);
 
-    std::string output = create_output_name(input_name);
+    std::string output = create_output_name(input_name, n_neigh);
 
     int n = 0;
     int nan = 0;
     int caca = 0;
-    float noise = std::max((float)atof(argv[5]), noise_min);
-    float lim_mu = atof(argv[2]);
-    float lim_mu_pos = atof(argv[6]);
-    float dist_moy = (sqrt((float)(n_neigh))/2.0)*resolution;
+    float noise = (float)atof(argv[5]);
+    noise = std::max(noise, noise_min);
+    noise = std::min(noise, noise_max);
 
-    if(lim_mu < epsilon)
-    {
-//        lim_mu = 0.1; //  angle between pip0 and n à 80° ou 100 ° (10° de ce qui est voulu)
-//        lim_mu = noise/(5*resolution);
-        lim_mu = noise * (1 + 1/sqrt( (dist_moy/2)*(dist_moy/2) + (2*noise)*(2*noise) ));
-//        lim_mu = 0.5*noise * (1 + 1/sqrt( (dist_moy/2)*(dist_moy/2) + (2*noise)*(2*noise) ));
-    }
-
-    if(lim_mu_pos < epsilon)
-    {
-        lim_mu_pos = 0.01*noise;
-//        lim_mu_pos = noise*noise;
-    }
+    float lim_mu_pos = 0.01*noise;
 
     std::cout<<"first lim_mu :" <<lim_mu<<std::endl;
     std::cout<<"second lim_mu (lim_mu_pos) :" <<lim_mu_pos<<std::endl<<std::endl;
@@ -108,9 +95,9 @@ int main(int argc, char *argv[])
 //    ///
 
 
-//    int idx = 7761;
+//    int idx = 28988;
 //    for (int i = idx; i < idx+1; ++i )
-    #pragma omp parallel for schedule(dynamic) num_threads(omp_get_max_threads()) shared(pc, tree, noise, n_neigh, div_fact, lim_mu, lim_mu_pos, normals, points)
+    #pragma omp parallel for schedule(dynamic) num_threads(omp_get_max_threads()) shared(pc, tree, noise, n_neigh, div_fact, lim_mu_pos, normals, points)
     for (int i = 0; i < cloud_size; ++i)
     {
         CApp app(pc, tree, i, noise);
@@ -238,7 +225,7 @@ int main(int argc, char *argv[])
 
 
 
-std::string create_output_name(std::string input_name)
+std::string create_output_name(std::string input_name, int n_neigh)
 {
     size_t lastindex_point = input_name.find_last_of(".");
     lastindex_point -= 6;
@@ -251,7 +238,7 @@ std::string create_output_name(std::string input_name)
     input_name = input_name.substr(lastindex_slash+1, lastindex_point-(lastindex_slash+1));
     std::stringstream stm;
     stm.str("");
-    stm<<"../"<<input_name<<"result.csv";
+    stm<<"../"<<input_name<<n_neigh<<"_result.csv";
     return stm.str();
 }
 

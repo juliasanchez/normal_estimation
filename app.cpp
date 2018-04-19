@@ -203,7 +203,7 @@ void CApp::getEdgeDirection(int it)
     normal_test(2) = 0;
     normal_test /= normal_test.norm();
 
-    theta = 2*M_PI/it;
+    theta = M_PI/it;
     Eigen::Affine3f transform = Eigen::Affine3f::Identity();
     transform.rotate (Eigen::AngleAxisf (theta, normal));
 
@@ -292,9 +292,6 @@ void CApp::ComputeWeighs()
     float max_poids = 0;
     for (int c = 0; c < neighborhood_.size(); c++)
     {
-//        float alpha = ( max_dist-dist_[c].norm() )/max_dist;
-//        float er_tot = (1-alpha)*er_angle[c]/er_angle_max + (1-alpha) * er_proj[c]/er_proj_max;
-//        poids_[c] = dist_weighs_[c] * mu_ / (er_tot*er_tot + mu_);
         poids_[c] = dist_weighs_[c] * mu_ / (er_tot[c]*er_tot[c] + mu_);
         if(max_poids < poids_[c])
             max_poids  = poids_[c];
@@ -304,6 +301,19 @@ void CApp::ComputeWeighs()
     {
         poids_[c] /= max_poids;
     }
+
+//    std::vector<float> poids_cpy = poids_;
+//    std::sort(poids_cpy.begin(), poids_cpy.end());
+//    max_poids = poids_cpy[(int)(0.9*poids_.size())];
+
+//    for (int c = 0; c < neighborhood_.size(); c++)
+//    {
+//        if(poids_[c] < max_poids )
+//            poids_[c] /= max_poids;
+//        else
+//            poids_[c] = 1.0;
+//    }
+
 }
 
 void CApp::ComputeTotalError(std::vector<float>& er_tot)
@@ -330,7 +340,7 @@ void CApp::ComputeTotalError(std::vector<float>& er_tot)
     for (int c = 0; c < neighborhood_.size(); c++)
     {
         float alpha = ( max_dist-dist_[c].norm() )/max_dist;
-        er_tot[c] = (1-alpha)*er_angle[c]/er_angle_max + (1-alpha) * er_proj[c]/er_proj_max;
+        er_tot[c] = (1-alpha)*er_angle[c]/er_angle_max + alpha * er_proj[c]/er_proj_max;
     }
 }
 
@@ -349,6 +359,19 @@ void CApp::ComputeWeighs_proj()
     for (int c = 0; c < neighborhood_.size(); c++)
         poids_[c] /= max_poids;
 
+//    std::vector<float> poids_cpy = poids_;
+//    std::sort(poids_cpy.begin(), poids_cpy.end());
+//    max_poids = poids_cpy[(int)(0.9*poids_.size())];
+
+//    for (int c = 0; c < neighborhood_.size(); c++)
+//    {
+//        if(poids_[c] < max_poids )
+//            poids_[c] /= max_poids;
+//        else
+//            poids_[c] = 1.0;
+//    }
+
+
 }
 
 
@@ -356,36 +379,28 @@ void CApp::ComputeWeighs_proj()
 
 void CApp::Optimize(bool first)
 {
+//    system("rm *.csv");
     if (first)
     {
         mu_ = mu_max;
     }
     else
     {
-        std::vector<float> dist(dist_.size());
-        for (int i = 0; i<dist.size(); ++i)
-        {
-            Eigen::Vector3f normalized = dist_[i]/dist_[i].norm();
-            dist[i] = normal.dot(normalized) * normal.dot(normalized);
-        }
-
-        std::sort(dist.begin(), dist.end());
-        mu_ = std::max(limMu_,(float)dist[(int)(dist.size()/4)]);
-//        mu_ = 5*std::max(limMu_,dist[(int)(dist.size())]);
+        mu_ = mu_max/div_option2;
     }
 
-    int it = std::max(itr_per_mu*(int)(log(mu_/(limMu_) )/log(divFact_)), itr_min);
+    int it = itr_per_mu*(int)(log(mu_/(limMu_) )/log(divFact_));
 
     const int nvariable = pt.size()-1;	// dimensions of J
     Eigen::MatrixXd JTJ(nvariable, nvariable);
     Eigen::MatrixXd JTr(nvariable, 1);
     Eigen::MatrixXd J(nvariable, 1);
     Eigen::Vector3f normalized;
-    int imp = 0;
+    int imp = (int)(1/epsilon);
 
     int itr = 0;
 //    for( int itr = 1; itr <= it; ++itr)
-    while(imp<(int)(0.75*neighborhood_.size()) && itr<it)
+    while(imp>(int)(0.25*neighborhood_.size()) && itr<it)
     {
         if( mu_ > limMu_ && (itr % itr_per_mu) == 0)
             mu_ /= divFact_;
@@ -395,11 +410,11 @@ void CApp::Optimize(bool first)
 
         ///actualize normal
 
-//        if(itr%10 == 0 || itr<10)
-//            save_itr(itr);
-
-        //compute weighs
+        //compute weighs depending on the current error of the neighbors
           ComputeWeighs();
+
+//          if(itr%10 == 0 || itr<10)
+//              save_itr(itr);
 
         // minimize function and actualize phi, theta and consequently normal
 
@@ -420,7 +435,7 @@ void CApp::Optimize(bool first)
         imp = 0;
         for (int c = 0; c < neighborhood_.size(); c++)
         {
-            if(poids_[c] < 0.1)
+            if(poids_[c] > 0.5)
             {
                 ++imp;
             }
@@ -556,6 +571,7 @@ void CApp::OptimizePos1(bool first)
     //-----------------------------------------------------------------------------------------
 
     int it = std::max(itr_per_mu*(int)(log(mu_/(limMuPos_) )/log(divFact_)), itr_min);
+//    int it = itr_per_mu*(int)(log(mu_/(limMuPos_) )/log(divFact_)) + itr_min;
 
     const int nvariable = 2;	// two variables : phi and theta of normal
     Eigen::MatrixXd JTJ(nvariable, nvariable);
@@ -589,15 +605,10 @@ void CApp::OptimizePos1(bool first)
                 sum_poids += poids_[c];
                 moy_proj += r;
             }
-//            if(pow(normal.dot(dist_[c]),2)<0.25*mu)
-//            {
-//                r = poids_[c]*normal.dot(dist_[c]);
-//                sum_poids += poids_[c];
-//                moy_proj += r;
-//            }
         }
         moy_proj = moy_proj/sum_poids;
-        pt = pt + moy_proj*normal;
+//        if(noise_ > noise_min)  // to move point only when there is noise
+            pt = pt + moy_proj*normal;
 
         ComputeDist();
 
@@ -688,7 +699,7 @@ void CApp::actuNormal( float phi_new, float theta_new)
 {
     phi = phi_new;
     theta = theta_new;
-    if(theta < epsilon)
+    if(abs(theta) < epsilon)
         theta = theta_min;
 
     normal(0) = sin(theta) * cos(phi);
@@ -723,14 +734,6 @@ void CApp::evaluate(int *impact, float *sum)
             ++sum_poids;
             ++imp;
         }
-//        if(pow(normal.dot(dist_[c]),2)<mu)
-//        {
-//            sum_error += poids_[c] * normal.dot(dist_[c]);
-//            sum_poids += poids_[c];
-////            sum_error += normal.dot(dist_[c]);
-////            ++sum_poids;
-//            ++imp;
-//        }
     }
 
     *impact = imp;
@@ -747,7 +750,7 @@ void CApp::setNormal(Eigen::Vector3f norm)
     normal = norm;
     phi = atan2(normal(1),normal(0));
     theta = acos(normal(2));
-    if(theta == 0)
+    if(abs(theta) < epsilon)
         theta = theta_min;
 }
 
@@ -769,12 +772,12 @@ bool CApp::isNan()
 
 void CApp::select_normal()
 {
-    if( moyErrorFirst_<moyErrorSecond_ && impactFirst_>(int)(lim_impacters*(float)neighborhood_.size()) /*&& abs(sum_error)<0.01*/ ) // la limite abs(sum_error1) est dégueux A CHANGER
+    if( moyErrorFirst_<moyErrorSecond_ && impactFirst_>(int)(lim_impacters*(float)neighborhood_.size()) ) // la limite abs(sum_error1) est dégueux A CHANGER
     {
         finalNormal_ = *normalFirst2_;
         finalPos_ = *pointFirst_;
     }
-    else if(impactSecond_>(int)(lim_impacters*(float)neighborhood_.size()) /*&& abs(sum_error1)<0.01*/)  // la limite abs(sum_error1) est dégueux A CHANGER
+    else if(impactSecond_>(int)(lim_impacters*(float)neighborhood_.size()))  // la limite abs(sum_error1) est dégueux A CHANGER
     {
         finalNormal_  = *normalSecond2_;
         finalPos_  = *pointSecond_;

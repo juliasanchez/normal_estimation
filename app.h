@@ -14,24 +14,32 @@
 
 using namespace std;
 
+//Important constants with real effect on result
+const float thresh_weigh = 0.6;     // weigh threshold value for neighbors when moving point with mean projection of neighbors
+const float impacter_weigh = 0.6;   // weigh threshold for computing error and evaluate/select normals
+const float lim_impacters = 0.1;    // limit % of points of the neighborhood which must have an impact on the normal computation
+const float lim_mu = 0.1;           // mu threshold value when optimizing without moving points positions decrease when no noise
+const float div_option2 = 6.0;     // initial mu when starting the optimization for selection 2 (mu_max/div_option2)
+                                    // decrease if too many outliers/ increase if too many wrong selection
+const float coeff_sigma = 2;        // sigma for distance weigh = coeff_sigma*farthestePoint increase if the surface were the point lays is small compared to neighborhood
+
+//Usual constants DO NOT MODIFY
 const float epsilon = 1e-10;        // small value for initializations of comparisons
 const float lim_error = 1e-5;       // to stop optimize when not moving
 const float lim_diff = 1e-7;        // to stop optimize when not moving
-const float theta_min = 1e-10;    // because theta can not be 0 for phi to make sense
+const float theta_min = 1e-10;      // because theta can not be 0 for phi to make sense
 
-const float thresh_weigh = 0.6;//0.6;     // weigh threshold value for neighbors when moving point with mean projection of neighbors
-const float impacter_weigh = 0.6;//0.7;//0.8;   // weigh threshold for computing error and evaluate/select normals
-const float mu_max = 1.0;           // mu when starting optimize for the first time
-const int itr_min = 50;           //
-const float coeff_sigma = 2;        // sigma for distance weigh = coeff_sigma*farthestePoint
-const float init2_accuracy = 20;    // number of vectors tested to get edge direction(maybe decrease to gain time)
+//Detail constants
+const int itr_min = 50;             // minimum number of iterations to perform
+const float mu_max = 3.0;           // initial mu when starting optimize for the first time
+const float init2_accuracy = 50;    // number of vectors tested to get edge direction (may be decreased to gain time)
 const float N_hist = 10;            // number of bins used to find the 2nd initialization
-const float itr_opti_pos_plan = 30; // number of iterations to optimize position of point in plane
-const int itr_per_mu = 1;
-const float lim_impacters = 0.1;
-const float opti_threshold = 0.005;
-const float noise_min = 0.0001; // minimum noise to make it not infinite
+const int itr_per_mu = 1;           // number of iterations to perform for each mu
+const float itr_opti_pos_plan = 30; // number of iterations to optimize position of point in plane configuration
+const float noise_min = 0.001;      // minimum noise to make it not infinite
+const float noise_max = 0.01;       // maximum noise to force iterations when very noisy
 const float likelihood_threshold = 0.95; // value for evaluation/comparison between vectors
+
 
 class CApp{
 public:
