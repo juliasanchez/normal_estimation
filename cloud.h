@@ -11,7 +11,6 @@
 #include "/usr/local/include/Eigen/Eigen"
 #include "/usr/local/include/Eigen/Eigenvalues"
 
-//using namespace Eigen;
 using namespace std;
 
 class cloud{
@@ -19,13 +18,13 @@ public:
     cloud();
     int Read(std::string filepath);
     void buildTree();
-    std::vector<Eigen::Vector3f>* getPC();
+    Eigen::Matrix<float, Eigen::Dynamic, 3> * getPC();
     flann::Index<flann::L2<float>>* getTree();
     float getResolution ();
 
 private:
 	// containers
-    std::vector<Eigen::Vector3f> pointcloud_;
+    Eigen::Matrix<float, Eigen::Dynamic, 3> *pointcloud_;
     flann::Index<flann::L2<float>>* tree_;
     float getNearestNeighborDistance(Eigen::Vector3f pt);
     void SearchFLANNTree(flann::Index<flann::L2<float>>* index,

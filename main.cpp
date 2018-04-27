@@ -33,17 +33,20 @@ std::string create_output_name(std::string, int);
 int main(int argc, char *argv[])
 {   
     system("rm *.csv");
-    if (argc != 11)
+    if (argc != 9)
     {
-        printf("./FastGlobalRegistration [pointcloud] [lim_mu] [neighbors number] [div_fact] [noise] [lim_mu_pos] [optimize_pos?] [with_symmetrics?] [output_file] [Ref]\n");
+        std::cout<<std::endl;
+        printf("./FastGlobalRegistration [pointcloud] [number of neighbors] [div_fact] [noise] [thresh_weigh] [lim_mu] [impacter_weigh] [Ref]\n");
         return 0;
     }
     else
     {
+        std::cout<<std::endl;
         for (int i = 1 ; i<argc; i++)
         {
-            std::cout<<argv[i]<<"   "<<std::endl<<std::endl;
+            std::cout<<argv[i]<<"   ";
         }
+        std::cout<<std::endl<<std::endl;
     }
 
     //------------------------------------------------------------------------------------------------
@@ -54,31 +57,38 @@ int main(int argc, char *argv[])
     c.buildTree();
     float resolution = c.getResolution();
 
-    std::vector<Eigen::Vector3f>* pc = c.getPC();
+    Eigen::Matrix<float, Eigen::Dynamic, 3>* pc = c.getPC();
     flann::Index<flann::L2<float>>* tree = c.getTree();
     std::cout<<"pointcloud resolution: "<<resolution<<std::endl<<std::endl;
 
-    int n_neigh = atoi(argv[3]);
-    float div_fact = atof(argv[4]);
+    int n_neigh = atoi(argv[2]);
+    float div_fact = atof(argv[3]);
 
     std::string output = create_output_name(input_name, n_neigh);
 
     int n = 0;
+    int inv = 0;
     int nan = 0;
     int caca = 0;
-    float noise = (float)atof(argv[5]);
+    float noise = (float)atof(argv[4]);
     noise = std::max(noise, noise_min);
     noise = std::min(noise, noise_max);
 
-    float lim_mu_pos = 0.01*noise;
+    const float lim_mu = atof(argv[5]);           // mu threshold value when optimizing without moving points positions decrease when no noise
+    const float thresh_weigh = atof(argv[6]);     // weigh threshold value for neighbors when moving point with mean projection of neighbors
+    const float impacter_weigh = atof(argv[7]);   // weigh threshold for computing error and evaluate/select normals
 
-    std::cout<<"first lim_mu :" <<lim_mu<<std::endl;
-    std::cout<<"second lim_mu (lim_mu_pos) :" <<lim_mu_pos<<std::endl<<std::endl;
+
+    float lim_mu_pos = lim_mu_pos_coeff*noise;
+
+//    std::cout<<"second lim_mu (lim_mu_pos) :" <<lim_mu_pos<<std::endl<<std::endl;
 
     std::vector<Eigen::Vector3f> normals(cloud_size);
     std::vector<Eigen::Vector3f> points(cloud_size);
     std::vector<Eigen::Vector3f> wrong_normals;
     std::vector<Eigen::Vector3f> wrong_points;
+    std::vector<Eigen::Vector3f> inverted_normals;
+    std::vector<Eigen::Vector3f> inverted_points;
     std::vector<Eigen::Vector3f> true_normals;
     std::vector<Eigen::Vector3f> true_points;
     std::vector<Eigen::Vector3f> caca_normals;
@@ -95,7 +105,7 @@ int main(int argc, char *argv[])
 //    ///
 
 
-//    int idx = 28988;
+//    int idx = 1357;
 //    for (int i = idx; i < idx+1; ++i )
     #pragma omp parallel for schedule(dynamic) num_threads(omp_get_max_threads()) shared(pc, tree, noise, n_neigh, div_fact, lim_mu_pos, normals, points)
     for (int i = 0; i < cloud_size; ++i)
@@ -118,7 +128,7 @@ int main(int argc, char *argv[])
 
             bool first = true;
             app.Optimize(first);
-            app.OptimizePos1(first);
+            app.OptimizePos1(first, thresh_weigh, impacter_weigh);
 
             //Compute second solution ------------------------------------------------------------------------------------------------------
 
@@ -127,7 +137,7 @@ int main(int argc, char *argv[])
             app.init2();
             first = false;
             app.Optimize(first);
-            app.OptimizePos1(first);
+            app.OptimizePos1(first, thresh_weigh, impacter_weigh);
 
             //save result ------------------------------------------------------------------------------------------------------
 
@@ -167,40 +177,49 @@ int main(int argc, char *argv[])
 
     auto t_tot2 = std::chrono::high_resolution_clock::now();
 
-    std::cout<<"reading reference : "<<input_name<<std::endl<<std::endl;
+    std::cout<<"evaluating"<<std::endl<<std::endl;
     std::vector<Eigen::VectorXf> ref;
-    read(argv[10], ref);
+    read(argv[8], ref);
 
 //    for (int i = idx; i<idx+1 ; ++i)
     for (int i = 0; i<normals.size(); ++i)
     {
         Eigen::Vector3f point_ref = {ref[i](0), ref[i](1), ref[i](2)};
         Eigen::Vector3f normal_ref = {ref[i](3), ref[i](4), ref[i](5)};
-        if(abs(normal_ref.dot(normals[i]))<likelihood_threshold)
+        if(abs(normal_ref.dot(normals[i]))<0.996 && abs(normal_ref.dot(normals[i]))>0.17) //normales à + de 5 degrés d'écart avec la vérité terrain mais pas inversées
         {
             ++n;
-            std::cout<<"wrong normal :"<<i<<"          /          "<<n<<std::endl;
+//            std::cout<<"wrong normal :"<<i<<"          /          "<<n<<std::endl;
             wrong_normals. push_back(normals[i]);
             wrong_points. push_back(points[i]);
             true_normals.push_back(normal_ref);
             true_points.push_back(point_ref);
         }
 
-        if( abs(normal_ref.dot(normals[i]))<likelihood_threshold && abs(normal_ref.dot(normals[i]))>0.2)
+        if(abs(normal_ref.dot(normals[i]))<0.17) //normales inversées (10° de l'inverse)
+        {
+            ++inv;
+            inverted_normals. push_back(normals[i]);
+            inverted_points. push_back(points[i]);
+        }
+
+        if( abs(normal_ref.dot(normals[i]))<0.985 && abs(normal_ref.dot(normals[i]))>0.17) //normales à + de 10 degrés d'écart avec la vérité terrain mais pas inversées
         {
             caca++;
-            std::cout<<"caca :"<<i<<std::endl;
+//            std::cout<<"caca :"<<i<<std::endl;
             caca_normals. push_back(normals[i]);
             caca_points. push_back(points[i]);
         }
     }
 
     std::cout<<"number of caca normals: "<<caca<<std::endl<<std::endl;
-    std::cout<<"number of false normals : "<<n<<"     -------------------    "<<"percentage : "<<(float)(n)/(float)cloud_size<<std::endl<<std::endl;
+    std::cout<<"number of inverted normals : "<<inv<<"     -------------------    "<<"percentage : "<<(float)(inv)/(float)cloud_size<<std::endl<<std::endl;
+    std::cout<<"number of non accurate normals : "<<n<<"     -------------------    "<<"percentage : "<<(float)(n)/(float)cloud_size<<std::endl<<std::endl;
     std::cout<<"total time to get normals :" <<std::chrono::duration_cast<std::chrono::milliseconds>(t_tot2-t_tot1).count()<<" milliseconds"<<std::endl<<std::endl;
 
     write(output, points, normals);
     write("wrong.csv", wrong_points, wrong_normals);
+    write("inverted.csv", inverted_points, inverted_normals);
     write("caca.csv", caca_points, caca_normals);
     write("true.csv", true_points, true_normals);
 

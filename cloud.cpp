@@ -30,7 +30,10 @@ int cloud::Read(std::string filepath)
             ++n;
         }
         fin.close();
-        pointcloud_ = res;
+
+        pointcloud_ = new Eigen::Matrix<float, Eigen::Dynamic, 3>(res.size(), 3);
+        for(int i = 0; i<res.size(); ++i)
+            pointcloud_->row(i) = res[i];
     }
     else
     {
@@ -45,8 +48,8 @@ int cloud::Read(std::string filepath)
 
 void cloud::buildTree()
 {
-    int dim = pointcloud_[0].size();
-    int pc_size = pointcloud_.size();
+    int dim = pointcloud_->cols();
+    int pc_size = pointcloud_->rows();
 
     std::vector<float> pc(pc_size * dim);
     flann::Matrix<float> flann_mat(&pc[0], pc_size, dim);
@@ -57,7 +60,7 @@ void cloud::buildTree()
     {
         for (int j =0; j < dim; ++j)
         {
-            pc[n] = pointcloud_[i](j);
+            pc[n] = (*pointcloud_)(i,j);
             ++n;
         }
     }
@@ -72,12 +75,12 @@ float cloud::getResolution ()
 {
   float res = 0.0;
 
-  for (int i = 0; i<pointcloud_.size(); ++i)
+  for (int i = 0; i<pointcloud_->rows(); ++i)
   {
-      res += getNearestNeighborDistance(pointcloud_[i]);
+      res += getNearestNeighborDistance(pointcloud_->row(i));
   }
 
-  res /= pointcloud_.size();
+  res /= pointcloud_->rows();
   return res;
 }
 
@@ -123,9 +126,9 @@ void cloud::SearchFLANNTree(flann::Index<flann::L2<float>>* index,
 }
 
 
-std::vector<Eigen::Vector3f>* cloud::getPC()
+Eigen::Matrix<float, Eigen::Dynamic, 3>* cloud::getPC()
 {
-    return &pointcloud_;
+    return pointcloud_;
 }
 
 flann::Index<flann::L2<float>>* cloud::getTree()
