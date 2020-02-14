@@ -1,3 +1,1 @@
-add_library(FastGlobalRegistrationLib STATIC app.cpp app.h)
-add_executable(FastGlobalRegistration main.cpp)
-TARGET_LINK_LIBRARIES(FastGlobalRegistration FastGlobalRegistrationLib)
+add_executable(normal_estimation main.cpp app.cpp cloud.cpp)

@@ -1,45 +1,44 @@
-#include <vector>
-#include <flann/flann.hpp>
+// -------------------------------------------------------------------------------------
+//        Iterative weighted PCA for robust and edge-aware normal vector estimation
+//--------------------------------------------------------------------------------------
+// Julia Sanchez, Florence Denis, David Coeurjolly, Florent dupont, Laurent Trassoudaine, Paul Checchin
+// Liris (Lyon), Institut Pascal (Clermont Ferrand)
+// Région Auvergne Rhône Alpes ARC6
+// Private use for reviewers only
+// --------------------------------------------------------------------------------------
 
-#include <fstream>
+
 #include <math.h>
 #include <algorithm>
 #include <chrono>
 #include <utility>
 #include <vector>
-#include "/usr/local/include/Eigen/Core"
-#include "/usr/local/include/Eigen/Dense"
-#include "/usr/local/include/Eigen/Eigen"
-#include "/usr/local/include/Eigen/Eigenvalues"
+
+#include "Core"
+#include "Dense"
+#include "Eigenvalues"
+#include "flann/flann.hpp"
 
 using namespace std;
 
-//Important constants with real effect on result
-//const float thresh_weigh = 0.25;     // weigh threshold value for neighbors when moving point with mean projection of neighbors
-//const float lim_mu = 0.1;           // mu threshold value when optimizing without moving points positions decrease when no noise
-const float mu_max2 = 0.5;          // initial mu when starting the optimization for selection 2
-                                    // decrease if too many outliers/ increase if too many wrong selection
-const float lim_mu_pos_coeff = 0.005;
-//const float impacter_weigh = 0.5;   // weigh threshold for computing error and evaluate/select normals
-const float lim_impacters = 0.1;    // limit % of points of the neighborhood which must have an impact on the normal computation
-const float coeff_sigma = 2;        // sigma for distance weigh = coeff_sigma*farthestePoint increase if the surface were the point lays is small compared to neighborhood
+//Constants with effect on result
+const float mu_max2 = 0.35; //0.35;         // initial mu when starting the optimization for selection 2
+                                    // increase if too many normals stuck in medium position/ decrease if too many face confusions when sampling anisotropy
+const float div_fact = 1.01;
 
 //Usual constants DO NOT MODIFY
 const float epsilon = 1e-10;        // small value for initializations of comparisons
 const float lim_error = 1e-5;       // to stop optimize when not moving
 const float lim_diff = 1e-7;        // to stop optimize when not moving
-const float theta_min = 1e-10;      // because theta can not be 0 for phi to make sense
 
 //Detail constants
-const int itr_min = 50;             // minimum number of iterations to perform
-const float mu_max = 3.0;           // initial mu when starting optimize for the first time (maximum error = 1 -> 3 leads to an initialization with all weighs ~= 1 )
-const float init2_accuracy = 50;    // number of vectors tested to get edge direction (may be decreased to gain time)
-const float N_hist = 10;            // number of bins used to find the 2nd initialization
-const int itr_per_mu = 1;           // number of iterations to perform for each mu
-const float itr_opti_pos_plan = 30; // number of iterations to optimize position of point in plane configuration
-const float noise_min = 0.0001;      // minimum noise to make it not infinite
-const float noise_max = 0.01;       // maximum noise to force iterations anyway when very noisy
-const float likelihood_threshold = 0.99; // value for evaluation/comparison between vectors
+const int itr_min = 5;                      // minimum number of iterations to perform
+const float mu_max = 1.0;                   // coefficient to compute the initial mu when starting optimize for the first time (emax = er_max*mu_max)
+const int itr_per_mu = 1;                   // number of iterations to perform for each mu
+const float noise_min = 0.000001;           // minimum noise to make it not infinite
+const float likelihood_threshold = 0.95;    // value for evaluation/comparison between vectors
+const float min_points_fact = 0.1;          // limit number of points of the neighborhood which must have an impact on the normal computation
+const float thresh_weight = 0.25;           // threshold to select neighbors
 
 
 class CApp{
@@ -128,43 +127,47 @@ public:
             delete pointSecond_;
     };
 
-    void setTree(flann::Index<flann::L2<float>> *t);
-    void setPc(Eigen::Matrix<float, Eigen::Dynamic, 3> *pc);
+    void setTree(flann::Index<flann::L2<float>> *t){tree_ = t;}
+    void setPc(Eigen::Matrix<float, Eigen::Dynamic, 3> *pc){pointcloud_ = pc;};
     void setRef (int ref);
-    void setNormal(Eigen::Vector3f norm);
+    void setNormal(Eigen::Vector3f norm){normal = norm;};
     void setPoint(Eigen::Vector3f point);
-    void setLimMu ( float limMu){limMu_ = limMu;};
-    void setLimMuPos ( float limMuPos){limMuPos_ = limMuPos;};
-    void setDivFact ( float divFact){divFact_= divFact;};
-    void setNoise ( float noise){noise_= noise;};
-    void setParams(float divFact, float limMu, float limMuPos)
+    void setLimMu ( float limMu){limMu_ = limMu;}
+    void setNbrNeighbors(int N){n_neigh_ = N;}
+    void setLimMuPos ( float limMuPos){limMuPos_ = limMuPos;}
+    void setDivFact ( float divFact){divFact_= divFact;}
+    void setNoise ( float noise){noise_= noise;}
+    void setParams(float divFact, float curvature)
     {
-        limMu_ = limMu;
-        limMuPos_ = limMuPos;
         divFact_= divFact;
+        curvature_ = curvature;
     };
-    Eigen::Vector3f getNormal();
-    Eigen::Vector3f getPoint ();
-    Eigen::Matrix<float, Eigen::Dynamic, 3> getNeighborhood();
-    int get_N_neigh();
+    Eigen::Vector3f getNormal(){return normal;}
+    Eigen::Vector3f getPoint (){return pt;}
+    Eigen::Matrix<float, Eigen::Dynamic, 3> getNeighborhood(){return neighborhood_;}
+    int get_N_neigh(){return n_neigh_;}
 
     void reinitPoint();
     void ComputeDist();
-    void SearchFLANNTree(flann::Index<flann::L2<float>>* index,
+    void SearchFLANNTreeKnn(flann::Index<flann::L2<float>>* index,
                                 Eigen::Vector3f& input,
                                 std::vector<int>& indices,
                                 std::vector<float>& dists,
                                 int nn);
-    void selectNeighbors(int neigh_number);
+    void SearchFLANNTreeRadius(flann::Index<flann::L2<float>>* index,
+                                Eigen::Vector3f& input,
+                                std::vector<std::vector<int>>& indices,
+                                std::vector<std::vector<float>>& dists,
+                                float radius);
+    void selectNeighborsKnn(int N);
+    void selectNeighborsRadius(float r);
 
     void init1();
     void reinitFirst0();
-    void setFirst2();
     void init2();
     void Optimize(bool first);
-    void OptimizePos(int it);
-    void OptimizePos1(bool first, float thresh_weigh, float impacter_weigh);
-    void getEdgeDirection(int it);
+    void OptimizePos(bool first, float thresh_weigh);
+    Eigen::Vector3f getEdgeDirection(int it);
     void evaluate(int *impact, float *moyError, float impacter_weigh);
     void select_normal();
     void addSymmetricDist();
@@ -177,23 +180,28 @@ public:
     Eigen::Vector3f finalNormal_;
     Eigen::Vector3f finalPos_;
 
+    Eigen::Vector3f normal;
+    bool SuspectedOnEdge_;
+
 
 private:
-	// containers
+    int n_neigh_;
+    float radius_;
     float mu_;
     float noise_;
     float limMu_;
     float limMuPos_;
+    float curvature_;
     float divFact_;
+    float thresh_proj_;
     Eigen::Matrix<float, Eigen::Dynamic, 3> *pointcloud_;
     flann::Index<flann::L2<float>>* tree_;
     Eigen::Matrix<float, Eigen::Dynamic, 3> neighborhood_;
     Eigen::Matrix<float, Eigen::Dynamic, 3> dist_;
-    Eigen::Matrix<float, Eigen::Dynamic, 3> normalizedDist_;
     int ref_;
     Eigen::Vector3f pt;
     Eigen::Vector3f ptRef_;
-    Eigen::Vector3f normal;
+    Eigen::Vector3f centroid_;
     Eigen::Vector3f* normalFirst0_;
     Eigen::Vector3f* normalFirst1_;
     Eigen::Vector3f* normalFirst2_;
@@ -204,22 +212,22 @@ private:
     Eigen::Vector3f* pointSecond_;
     float theta;
     float phi;
-    Eigen::VectorXf weighs_;
-    Eigen::VectorXf dist_weighs_;
+    Eigen::VectorXf weights_;
     std::vector<float> error_;
     std::vector<float> diff_error_;
-    void ComputeDistWeighs();
-    void ComputeWeighs();
-    void ComputeWeighs_proj();
-    void actuNormal( float phi_new, float theta_new);
-    void ComputeTotalError(std::vector<float>& er_tot);
-    void actualizeMu();
+    void ComputeWeights();
+    float GetMaxError();
+    void ComputeNormProjError(std::vector<float>& er_proj);
     void orient();
+    void actualizeMu();
+    void init_weight();
     Eigen::Vector3f getThirdEigenVector(Eigen::Matrix3f& C);
     void save_itr(int itr);
     int impactFirst_;
     int impactSecond_;
     float moyErrorFirst_;
     float moyErrorSecond_;
-
+    bool jamais_fait;
+    float er_max;
+    float mu_init2_;
 };
